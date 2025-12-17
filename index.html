@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LV → Excel (DREIPLUS Preset v3)</title>
+  <title>LV → Excel (DREIPLUS Preset)</title>
   <style>
     body{font-family:system-ui,Arial,sans-serif;margin:0}
-    .wrap{display:grid;grid-template-columns:460px 1fr;gap:12px;height:100vh}
+    .wrap{display:grid;grid-template-columns:440px 1fr;gap:12px;height:100vh}
     .panel{padding:12px;border-right:1px solid #ddd;overflow:auto}
     .viewer{padding:12px;overflow:auto}
     label{display:block;font-size:12px;margin-top:10px;color:#333}
@@ -15,9 +15,7 @@
     .btnrow button{flex:1}
     canvas{border:1px solid #ccc;max-width:100%;height:auto}
     pre{height:220px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
-    .hint{font-size:12px;color:#666;margin-top:6px;line-height:1.35}
-    table{border-collapse:collapse;font-size:12px}
-    th,td{border:1px solid #ccc;padding:4px;vertical-align:top}
+    .hint{font-size:12px;color:#666;margin-top:6px}
   </style>
 
   <!-- Local copies (NO CDN) -->
@@ -27,17 +25,15 @@
 <body>
 <div class="wrap">
   <div class="panel">
-    <div class="hint"><b>GitHub Pages (https)</b> • DREIPLUS preset (v3) • PDF dosyası tarayıcıda kalır</div>
+    <div class="hint">GitHub Pages (https) • DREIPLUS preset • PDF dosyası tarayıcıda kalır</div>
 
     <label>PDF seç</label>
     <input id="pdfFile" type="file" accept="application/pdf" />
 
-    <label>Sayfa aralığı (opsiyonel)</label>
-    <div class="btnrow">
-      <input id="pageFrom" type="number" min="1" placeholder="Başlangıç (örn 349)" />
-      <input id="pageTo" type="number" min="1" placeholder="Bitiş (örn 355)" />
-    </div>
-    <div class="hint">Boş bırakırsan, yüklediğin PDF içindeki tüm sayfalar taranır.</div>
+    <label>Preset</label>
+    <select id="preset">
+      <option value="dreiplus" selected>DREIPLUS ZTV / LV-Texte</option>
+    </select>
 
     <div class="btnrow">
       <button id="loadBtn">PDF laden</button>
@@ -50,8 +46,8 @@
     </div>
 
     <div class="hint">
-      <b>DREIPLUS mantığı:</b> Pos satırı (örn <code>1.012.01.0010</code>) görülünce yeni kalem başlar.
-      Kalem bitişi: sonraki Pos satırı. EP/GP: satır içinde <code>EP ... GP ...</code> yakalanır.
+      Not: En iyi sonuç için LV sayfalarında “Nr. / Menge/Einheit / EP / GP” başlıklı tablo olmalı.
+      Başlık sayfaları / kapaklar otomatik atlanır.
     </div>
 
     <label>Log</label>
@@ -81,121 +77,8 @@ if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
 }
 
-function normText(s){ return (s||"").replace(/\s+/g," ").trim(); }
-
-function parseNumberDE(s){
-  s = normText(s);
-  if(!s) return null;
-  s = s.replace(/[^0-9,\.\-]/g,"");
-  if(!s) return null;
-  if(s.indexOf(",") >= 0){
-    s = s.replace(/\./g,"").replace(",", ".");
-  }
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-// DREIPLUS position item pattern: ... .0010 (last segment 4 digits)
-function isItemPos(s){
-  s = normText(s);
-  return /^\d+(?:\.\d+){2,}\.\d{4}$/.test(s);
-}
-
-// Title pattern like 1.012.01 (no 4-digit at end)
-function isTitlePos(s){
-  s = normText(s);
-  return /^\d+(?:\.\d+){2,}$/.test(s) && !isItemPos(s);
-}
-
-// Convert pdf.js text items to lines (y clustering)
-function itemsToLines(items){
-  const pts = items
-    .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str) }))
-    .filter(p => p.s);
-
-  // top->bottom
-  pts.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
-
-  const lines = [];
-  const yTol = 2.2;
-  for(const p of pts){
-    let line = lines.find(l => Math.abs(l.y - p.y) <= yTol);
-    if(!line){
-      line = { y: p.y, parts: [] };
-      lines.push(line);
-    }
-    line.parts.push({x:p.x, s:p.s});
-  }
-
-  for(const l of lines){
-    l.parts.sort((a,b)=>a.x-b.x);
-    l.text = l.parts.map(pp=>pp.s).join(" ").trim();
-    l.minX = l.parts.length ? l.parts[0].x : 999999;
-  }
-
-  lines.sort((a,b)=>b.y-a.y);
-  return lines;
-}
-
-function isNoiseLine(t){
-  t = normText(t);
-  if(!t) return true;
-
-  // headers / footers / carry-overs
-  const bad = [
-    /^Verlagsgesellschaft/i,
-    /^Schätz-?LV/i,
-    /^DREIPLUS/i,
-    /^ZTV-?LV-?Texte/i,
-    /^Telefon/i,
-    /^rudolf-mueller/i,
-    /^Fortsetzung auf nächster Seite/i,
-    /^Übertrag/i,
-    /^Alle Einzelbeträge netto/i,
-    /^B=\s*Bedarfsposition/i,
-    /^Seite \d+ von \d+/i,
-    /^Nr\.?\b/i,
-    /^Menge\/Einheit/i,
-    /^EP\b/i,
-    /^GP\b/i
-  ];
-  return bad.some(rx => rx.test(t));
-}
-
-// Extract unit/EP/GP from lines like: "m EP .... GP .... 5,10 -"
-function tryParsePrices(lineText){
-  const t = normText(lineText);
-  if(!/\bEP\b/i.test(t)) return null;
-
-  // unit is first token before EP if it looks like letters (m, m2, St, etc.)
-  let unit = null;
-  const unitMatch = t.match(/^([A-Za-z]{1,4}\d{0,2})\s+EP\b/i);
-  if(unitMatch) unit = unitMatch[1];
-
-  // Find all numbers in the line
-  const nums = t.match(/-?\d{1,3}(?:\.\d{3})*(?:,\d+)?|-?\d+(?:,\d+)?/g) || [];
-  // Remove false positives like years 2024 when present with EP? unlikely but safe:
-  const numVals = nums
-    .map(n => ({ raw:n, val: parseNumberDE(n) }))
-    .filter(o => o.val !== null && o.val < 1e6); // guard
-
-  // Decide EP/GP:
-  // - If two reasonable numbers: assume EP then GP (common)
-  // - If one number: assume EP
-  let EP = null, GP = null;
-  if(numVals.length >= 2){
-    EP = numVals[0].val;
-    GP = numVals[1].val;
-  }else if(numVals.length === 1){
-    EP = numVals[0].val;
-  }
-
-  return { unit, EP, GP };
-}
-
 async function loadPdf(){
   try{
-    logEl.textContent = "";
     log("loadPdf() başladı…");
     if(!window.pdfjsLib) throw new Error("pdf.min.js yüklenmedi.");
     const f = document.getElementById("pdfFile").files[0];
@@ -240,6 +123,85 @@ async function renderPage(pno){
   await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
 }
 
+// --- DREIPLUS extraction (position-based) ---
+
+function normText(s){
+  return (s||"").replace(/\s+/g," ").trim();
+}
+
+// Detect a “position / item number” in DREIPLUS LVs.
+// Examples seen: 1.012.01.0010, 1.012.01, 1.012, 1.012.01.0010.0 (rare)
+function looksLikePosNr(s){
+  s = normText(s);
+  if(!s) return false;
+  // must contain at least one dot and digits
+  if(!/^\d[\d\.]*\d$/.test(s)) return false;
+  if(s.indexOf(".") === -1) return false;
+  // avoid dates like 2024-... (hyphen) already excluded
+  // common patterns:
+  if(/^\d+(\.\d+)+$/.test(s)) return true;
+  return false;
+}
+
+// Build lines from text items based on y coordinate.
+function itemsToLines(items){
+  // Each item has transform [a,b,c,d,e,f] => e=x, f=y (in PDF units)
+  const pts = items
+    .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str) }))
+    .filter(p => p.s);
+
+  // Sort top->bottom (y desc), then left->right
+  pts.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
+
+  const lines = [];
+  const yTol = 2.2; // tolerance in PDF units; may tune
+  for(const p of pts){
+    let line = lines.find(l => Math.abs(l.y - p.y) <= yTol);
+    if(!line){
+      line = { y: p.y, parts: [] };
+      lines.push(line);
+    }
+    line.parts.push({x:p.x, s:p.s});
+  }
+
+  // sort parts in each line
+  for(const l of lines){
+    l.parts.sort((a,b)=>a.x-b.x);
+    l.text = l.parts.map(pp=>pp.s).join(" ").trim();
+  }
+
+  // sort lines top->bottom
+  lines.sort((a,b)=>b.y-a.y);
+  return lines;
+}
+
+// Column cut points (percentage of page width)
+// DREIPLUS table: Nr | Menge/Einheit | EP | GP
+function getCuts(pageWidth){
+  // empiric: Nr ends ~20%, Menge/Einheit ends ~62%, EP ends ~82%
+  return {
+    nrMax: pageWidth * 0.22,
+    qtyMax: pageWidth * 0.62,
+    epMax: pageWidth * 0.82,
+  };
+}
+
+function parseNumberDE(s){
+  // "5,10" -> 5.10 ; "1.234,50" -> 1234.5
+  s = normText(s);
+  if(!s) return null;
+  // keep digits, dot, comma, minus
+  s = s.replace(/[^0-9,\.\-]/g,"");
+  if(!s) return null;
+  // remove thousand separators
+  // if comma present, assume comma decimal
+  if(s.indexOf(",") >= 0){
+    s = s.replace(/\./g,"").replace(",", ".");
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function extractLV(){
   try{
     if(!pdfDoc){ alert("Önce PDF laden."); return; }
@@ -247,105 +209,217 @@ async function extractLV(){
 
     const out = [];
 
-    const fromUI = Number(document.getElementById("pageFrom").value);
-    const toUI = Number(document.getElementById("pageTo").value);
+    // Footer / header noise filters (case-insensitive)
+    const NOISE = [
+      /Fortsetzung/i,
+      /nächster\s+Seite/i,
+      /\bÜbertrag\b/i,
+      /Seite\s+\d+\s+von\s+\d+/i,
+      /DREIPLUS/i,
+      /\bZTV\b/i,
+      /LV-?Texte/i,
+      /KGR\s*\d+/i
+    ];
 
-    const startPage = Number.isFinite(fromUI) && fromUI>0 ? 1 : 1; // UI values are for original document; our PDF is already cropped
-    const endPage = pdfDoc.numPages;
+    function isNoiseText(t){
+      t = normText(t||"");
+      if(!t) return true;
+      if(t.length <= 1) return true;
+      return NOISE.some(rx => rx.test(t));
+    }
 
-    // We ignore original page numbers; we will store pdf page index, and try to read real "Seite XXX" if present.
+    // Classify left-column number:
+    // - "pos": ends with 4 digits (....0010)
+    // - "titel": shorter number (....01 or ....) used for titles/sections
+    function classifyNr(s){
+      s = normText(s);
+      if(!s) return null;
+      if(!/^\d[\d\.]*\d$/.test(s)) return null;
+      if(s.indexOf(".") === -1) return null;
+
+      const parts = s.split(".");
+      const last = parts[parts.length-1];
+      if(/^\d{4}$/.test(last)) return "pos";
+      // Titel patterns: 2-digit ending with >=3 parts, or 2-part sections like 1.012
+      if((parts.length >= 3 && /^\d{2}$/.test(last)) || parts.length === 2) return "titel";
+      return null;
+    }
+
     for(let p=1;p<=pdfDoc.numPages;p++){
       const page = await pdfDoc.getPage(p);
+      const vp = page.getViewport({ scale: 1.0 });
+      const width = vp.width;
+
       const tc = await page.getTextContent();
       const lines = itemsToLines(tc.items);
 
-      // Try to detect printed page number in text: "Seite 349 von 4457"
-      let printedPage = null;
-      for(const l of lines.slice(-15)){
-        const m = l.text.match(/Seite\s+(\d+)\s+von\s+\d+/i);
-        if(m){ printedPage = Number(m[1]); break; }
-      }
+      // Determine if this page is an LV table page
+      const joined = lines.slice(0,50).map(l=>l.text).join(" | ");
+      const isTablePage = /\bNr\.?\b/i.test(joined) && /Menge\/Einheit/i.test(joined);
+      if(!isTablePage) continue;
 
+      const cuts = getCuts(width);
       let current = null;
 
+      function flush(){
+        if(current){
+          current.Beschreibung = (current.Beschreibung || "").trim();
+          out.push(current);
+          current = null;
+        }
+      }
+
       for(const l of lines){
-        const t = normText(l.text);
-        if(isNoiseLine(t)) continue;
+        // Skip footer/header noise lines (full line)
+        if(isNoiseText(l.text)) continue;
 
-        // Detect a pos token on the far left. We look at the first token.
-        const firstTok = t.split(" ")[0];
+        // Build column texts from parts by x
+        let nrTxt = "";
+        let qtyTxt = "";
+        let epTxt = "";
+        let gpTxt = "";
 
-        // Skip title rows like "1.012.01 Titel ..."
-        if(isTitlePos(firstTok) && /\bTitel\b/i.test(t)){
+        for(const part of l.parts){
+          if(part.x <= cuts.nrMax) nrTxt += (nrTxt?" ":"") + part.s;
+          else if(part.x <= cuts.qtyMax) qtyTxt += (qtyTxt?" ":"") + part.s;
+          else if(part.x <= cuts.epMax) epTxt += (epTxt?" ":"") + part.s;
+          else gpTxt += (gpTxt?" ":"") + part.s;
+        }
+
+        nrTxt = normText(nrTxt);
+        qtyTxt = normText(qtyTxt);
+        epTxt = normText(epTxt);
+        gpTxt = normText(gpTxt);
+
+        // Skip obvious header lines
+        const headerish = /\bNr\b/i.test(nrTxt) || /Menge\/Einheit/i.test(qtyTxt) || /^EP$/i.test(epTxt) || /^GP$/i.test(gpTxt);
+        if(headerish) continue;
+
+        const kind = classifyNr(nrTxt);
+
+        // --- TITEL ROW ---
+        if(kind === "titel"){
+          flush();
+
+          // Title text is typically in the mid area (between Nr and EP)
+          const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
+          const titleText = normText(midParts.map(pt=>pt.s).join(" "));
+
+          if(titleText && !isNoiseText(titleText)){
+            out.push({
+              Seite: p,
+              Pos: nrTxt,
+              Menge: "",
+              MengeEinheit: "",
+              EP: "",
+              GP: "",
+              Beschreibung: titleText
+            });
+          }
           continue;
         }
 
-        if(isItemPos(firstTok)){
-          if(current){
-            current.Beschreibung = normText(current.Beschreibung);
-            out.push(current);
-          }
-          const rest = normText(t.slice(firstTok.length));
+        // --- NEW POSITION ---
+        if(kind === "pos"){
+          flush();
           current = {
-            Seite: printedPage ?? p,
-            Pos: firstTok,
+            Seite: p,
+            Pos: nrTxt,
             Menge: "",
-            Einheit: "",
+            MengeEinheit: "",
             EP: "",
             GP: "",
-            Beschreibung: rest,
+            Beschreibung: ""
           };
+
+          // Menge + Einheit (quantity + unit)
+          if(qtyTxt){
+            const toks = qtyTxt.split(" ");
+            if(toks.length === 1){
+              current.MengeEinheit = toks[0]; // unit only
+            }else{
+              const unit = toks[toks.length-1];
+              const maybeQty = toks.slice(0,-1).join(" ");
+              const q = parseNumberDE(maybeQty);
+              if(q !== null) current.Menge = q;
+              current.MengeEinheit = unit;
+            }
+          }
+
+          // Prices
+          const ep = parseNumberDE(epTxt);
+          const gp = parseNumberDE(gpTxt);
+          if(ep !== null) current.EP = ep;
+          if(gp !== null) current.GP = gp;
+
+          // Seed description from mid area
+          const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
+          const midText = normText(midParts.map(pt=>pt.s).join(" "));
+          if(midText && !isNoiseText(midText)){
+            // avoid pure numeric junk
+            if(!/^[0-9\s\.,\-]+(\s*[A-Za-z]{1,6})?$/.test(midText)){
+              current.Beschreibung += (current.Beschreibung ? " " : "") + midText;
+            }
+          }
           continue;
         }
 
-        // Price/unit lines: may appear on continuation page without repeating Pos
-        const pr = tryParsePrices(t);
-        if(pr && current){
-          if(pr.unit && !current.Einheit) current.Einheit = pr.unit;
-          if(pr.EP !== null && pr.EP !== undefined && pr.EP !== "" && !current.EP) current.EP = pr.EP;
-          if(pr.GP !== null && pr.GP !== undefined && pr.GP !== "" && !current.GP) current.GP = pr.GP;
-          continue; // don't add dotted line into description
-        }
-
-        // Continuation marker: ignore
-        if(/^Fortsetzung von Eintrag/i.test(t)) continue;
-
+        // --- CONTINUATION LINES ---
         if(current){
-          // Append to description
-          current.Beschreibung += (current.Beschreibung ? " " : "") + t;
+          // Append description text from mid area
+          const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
+          const midText = normText(midParts.map(pt=>pt.s).join(" "));
+          if(midText && !isNoiseText(midText)){
+            const looksNumeric = /^[0-9\s\.,\-]+$/.test(midText);
+            const looksUnitOnly = /^[A-Za-z]{1,6}$/.test(midText);
+            if(!looksNumeric && !looksUnitOnly){
+              current.Beschreibung += (current.Beschreibung ? " " : "") + midText;
+            }
+          }
+
+          // Sometimes prices or quantity appear without repeating Nr
+          if(!current.Menge && qtyTxt){
+            const toks = qtyTxt.split(" ");
+            if(toks.length >= 2){
+              const unit = toks[toks.length-1];
+              const maybeQty = toks.slice(0,-1).join(" ");
+              const q = parseNumberDE(maybeQty);
+              if(q !== null) current.Menge = q;
+              if(!current.MengeEinheit) current.MengeEinheit = unit;
+            }else if(toks.length === 1 && !current.MengeEinheit){
+              current.MengeEinheit = toks[0];
+            }
+          }
+
+          if(current.EP === "" || current.EP === null){
+            const ep = parseNumberDE(epTxt);
+            if(ep !== null) current.EP = ep;
+          }
+          if(current.GP === "" || current.GP === null){
+            const gp = parseNumberDE(gpTxt);
+            if(gp !== null) current.GP = gp;
+          }
         }
       }
 
-      if(current){
-        current.Beschreibung = normText(current.Beschreibung);
-        out.push(current);
-      }
+      flush();
     }
 
-    // Post-process: remove empty/garbage
-    const cleaned = out
-      .filter(r => r.Pos && isItemPos(r.Pos))
-      .map(r => {
-        // If unit still empty, default to 'm' when EP exists and PDF had m EP lines (common)
-        if(!r.Einheit && r.EP) r.Einheit = "m";
-        return r;
-      });
+    extractedRows = out;
+    log("Bitti. Satır sayısı: " + out.length);
 
-    extractedRows = cleaned;
-
-    log("Bitti. Bulunan poz sayısı: " + cleaned.length);
-
-    // Preview
-    let html = "<table><tr><th>Seite</th><th>Pos</th><th>Menge</th><th>Einheit</th><th>EP</th><th>GP</th><th>Beschreibung</th></tr>";
-    cleaned.slice(0,50).forEach(r=>{
+    // Preview first 50
+    let html = "<table border='1' style='border-collapse:collapse;font-size:12px'>";
+    html += "<tr><th>Seite</th><th>Pos</th><th>Menge</th><th>Menge Einheit</th><th>EP</th><th>GP</th><th>Beschreibung</th></tr>";
+    out.slice(0,50).forEach(r=>{
       html += "<tr>" +
-        "<td>"+escapeHtml(r.Seite)+"</td>" +
-        "<td>"+escapeHtml(r.Pos)+"</td>" +
-        "<td>"+escapeHtml(r.Menge)+"</td>" +
-        "<td>"+escapeHtml(r.Einheit)+"</td>" +
-        "<td>"+escapeHtml(r.EP)+"</td>" +
-        "<td>"+escapeHtml(r.GP)+"</td>" +
-        "<td>"+escapeHtml((r.Beschreibung||"").slice(0,220))+"</td>" +
+        "<td>"+(r.Seite??"")+"</td>"+
+        "<td>"+escapeHtml(r.Pos??"")+"</td>"+
+        "<td>"+(r.Menge??"")+"</td>"+
+        "<td>"+escapeHtml(r.MengeEinheit??"")+"</td>"+
+        "<td>"+(r.EP??"")+"</td>"+
+        "<td>"+(r.GP??"")+"</td>"+
+        "<td>"+escapeHtml((r.Beschreibung||"").slice(0,200))+"</td>"+
       "</tr>";
     });
     html += "</table><div class='hint'>İlk 50 satır gösteriliyor. Export ile tümü iner.</div>";
@@ -363,19 +437,43 @@ function escapeHtml(s){
 
 function exportCSV(){
   if(!extractedRows || !extractedRows.length){ alert("Önce LV Extract."); return; }
-  const cols = ["Seite","Pos","Menge","Einheit","EP","GP","Beschreibung"];
+  // Order: Seite, Pos, Menge, Menge Einheit, EP, GP, Beschreibung
+  const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
+  const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
   const esc = (v)=>(''+(v??'')).replace(/"/g,'""');
-  const csv = cols.join(",") + "\n" + extractedRows.map(r =>
+  const csv = header.join(",") + "\n" + extractedRows.map(r =>
     cols.map(c => `"${esc(r[c])}"`).join(",")
   ).join("\n");
+
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
-  a.download = "dreiplus_lv.csv";
+  a.download = "DREIPLUS_LV.csv";
   a.click();
 }
 
 function exportXLSX(){
   if(!extractedRows || !extractedRows.length){ alert("Önce LV Extract."); return; }
+  if(!window.XLSX){ alert("xlsx.full.min.js yüklenmedi."); return; }
+
+  const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
+  const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
+  const data = [header, ...extractedRows.map(r => cols.map(k => r[k] ?? ""))];
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws["!cols"] = [
+    { wch: 6 },  // Seite
+    { wch: 18 }, // Pos
+    { wch: 10 }, // Menge
+    { wch: 14 }, // Menge Einheit
+    { wch: 10 }, // EP
+    { wch: 10 }, // GP
+    { wch: 80 }, // Beschreibung
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "DREIPLUS_LV");
+  XLSX.writeFile(wb, "DREIPLUS_LV.xlsx");
+}
   if(!window.XLSX){ alert("xlsx.full.min.js yüklenmedi."); return; }
 
   const header = ["Seite","Pos","Menge","Einheit","EP","GP","Beschreibung"];
@@ -388,7 +486,7 @@ function exportXLSX(){
     { wch: 8 },  // Einheit
     { wch: 10 }, // EP
     { wch: 10 }, // GP
-    { wch: 90 }, // Beschreibung
+    { wch: 80 }, // Beschreibung
   ];
 
   const wb = XLSX.utils.book_new();
