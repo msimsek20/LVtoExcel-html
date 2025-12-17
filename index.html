@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LV → Excel (GitHub Pages)</title>
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;margin:0}
+    .wrap{display:grid;grid-template-columns:420px 1fr;gap:12px;height:100vh}
+    .panel{padding:12px;border-right:1px solid #ddd;overflow:auto}
+    .viewer{padding:12px;overflow:auto}
+    label{display:block;font-size:12px;margin-top:10px;color:#333}
+    input,select,button,textarea{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
+    .btnrow{display:flex;gap:8px;margin-top:10px}
+    .btnrow button{flex:1}
+    canvas{border:1px solid #ccc;max-width:100%;height:auto;cursor:crosshair}
+    pre{height:220px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
+  </style>
+
+  <!-- Local copies (NO CDN) -->
+  <script src="./pdf.min.js"></script>
+  <script src="./xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div style="font-size:12px;color:#666">GitHub Pages • https origin • PDF tarayıcıda kalır</div>
+
+    <label>PDF seç</label>
+    <input id="pdfFile" type="file" accept="application/pdf" />
+
+    <div class="btnrow">
+      <button id="loadBtn">PDF laden</button>
+      <button id="extractBtn">Extract</button>
+    </div>
+
+    <div class="btnrow">
+      <button id="csvBtn">Export CSV</button>
+      <button id="xlsxBtn">Export XLSX</button>
+    </div>
+
+    <label>Log</label>
+    <pre id="log"></pre>
+  </div>
+
+  <div class="viewer">
+    <canvas id="canvas"></canvas>
+    <div id="out"></div>
+  </div>
+</div>
+
+<script>
+// PDF.js 2.x bazı ortamlarda workerSrc ister; Pages'te worker kullanmadan dummy veriyoruz.
+if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "data:application/javascript,";
+}
+
+let pdfDoc = null;
+let extracted = null;
+
+const logEl = document.getElementById('log');
+function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
+document.getElementById('loadBtn').addEventListener('click', loadPdf);
+document.getElementById('extractBtn').addEventListener('click', extract);
+document.getElementById('csvBtn').addEventListener('click', exportCSV);
+document.getElementById('xlsxBtn').addEventListener('click', exportXLSX);
+
+async function loadPdf(){
+  try{
+    log("loadPdf() başladı…");
+    if(!window.pdfjsLib) throw new Error("pdf.min.js yüklenmedi. (Dosya adları aynı klasörde mi?)");
+    const f = document.getElementById("pdfFile").files[0];
+    if(!f) { alert("Önce PDF seç."); return; }
+    const buf = await f.arrayBuffer();
+    log("PDF boyutu: " + (buf.byteLength/1024/1024).toFixed(2) + " MB");
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: buf,
+      disableWorker: true,
+      disableFontFace: true,
+      useSystemFonts: true,
+      isEvalSupported: false,
+      stopAtErrors: false,
+    });
+
+    pdfDoc = await loadingTask.promise;
+    log("PDF geladen: " + pdfDoc.numPages + " Seiten");
+
+    const page = await pdfDoc.getPage(1);
+    const vp = page.getViewport({ scale: 1.5 });
+    const canvas = document.getElementById("canvas");
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    log("İlk sayfa çizildi.");
+  }catch(e){
+    log("HATA: " + (e && e.message ? e.message : e));
+    alert("Hata: " + (e && e.message ? e.message : e));
+  }
+}
+
+async function extract(){
+  try{
+    if(!pdfDoc){ alert("Önce PDF laden."); return; }
+    log("extract() başladı…");
+    const rows = [];
+    for(let p=1;p<=pdfDoc.numPages;p++){
+      const page = await pdfDoc.getPage(p);
+      const tc = await page.getTextContent();
+      for(const it of tc.items){
+        if(it.str && it.str.trim()){
+          rows.push([p, it.str]);
+        }
+      }
+    }
+    extracted = rows;
+    log("Extract ok: " + rows.length + " Textfragmente");
+
+    let html = "<table border='1' style='border-collapse:collapse;font-size:12px'>";
+    html += "<tr><th>Seite</th><th>Text</th></tr>";
+    rows.slice(0,200).forEach(r=>{
+      const t = String(r[1]).replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      html += `<tr><td>${r[0]}</td><td>${t}</td></tr>`;
+    });
+    html += "</table><div style='font-size:12px;color:#666;margin-top:6px'>İlk 200 satır gösteriliyor.</div>";
+    document.getElementById("out").innerHTML = html;
+  }catch(e){
+    log("HATA: " + (e && e.message ? e.message : e));
+    alert("Hata: " + (e && e.message ? e.message : e));
+  }
+}
+
+function exportCSV(){
+  if(!extracted){ alert("Önce Extract."); return; }
+  const esc = (v)=>(''+(v??'')).replace(/"/g,'""');
+  const csv = "Seite,Text\n" + extracted.map(r=>`"${esc(r[0])}","${esc(r[1])}"`).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
+  a.download = "lv.csv";
+  a.click();
+}
+
+function exportXLSX(){
+  if(!extracted){ alert("Önce Extract."); return; }
+  if(!window.XLSX){ alert("xlsx.full.min.js yüklenmedi."); return; }
+  const ws = XLSX.utils.aoa_to_sheet([["Seite","Text"], ...extracted]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "LV");
+  XLSX.writeFile(wb, "lv.xlsx");
+}
+</script>
+</body>
+</html>
