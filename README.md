@@ -13,7 +13,7 @@
 
 ### 🔧 Beschreibung
 **LVtoExcel-html** ist ein browserbasierter Konverter, der  
-**DREIPLUS ZTV / LV-PDF-Dateien** direkt in **strukturierte Excel-Dateien** umwandelt.
+**LV-PDF-Dateien** direkt in **strukturierte Excel-Dateien** umwandelt.
 
 ✔️ Läuft vollständig im Browser  
 ✔️ Keine Installation  
@@ -40,7 +40,7 @@
 
 ### 🔧 Description
 **LVtoExcel-html** is a browser-based tool that converts  
-**DREIPLUS ZTV / LV PDF files** into **clean, structured Excel spreadsheets**.
+**LV PDF files** into **clean, structured Excel spreadsheets**.
 
 ✔️ Runs entirely in the browser  
 ✔️ No installation required  
@@ -67,7 +67,7 @@
 
 ### 🔧 Açıklama
 **LVtoExcel-html**,  
-**DREIPLUS ZTV / LV PDF dosyalarını** tarayıcı içinde  
+**LV PDF dosyalarını** tarayıcı içinde  
 **düzenli ve kolonlu Excel dosyalarına** dönüştüren bir araçtır.
 
 ✔️ Kurulum gerekmez  
