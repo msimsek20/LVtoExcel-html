@@ -10,11 +10,11 @@
     .panel{padding:12px;border-right:1px solid #ddd;overflow:auto}
     .viewer{padding:12px;overflow:auto}
     label{display:block;font-size:12px;margin-top:10px;color:#333}
-    input,select,button,textarea{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
+    input,button{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
     .btnrow{display:flex;gap:8px;margin-top:10px}
     .btnrow button{flex:1}
-    canvas{border:1px solid #ccc;max-width:100%;height:auto;cursor:crosshair}
-    pre{height:220px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
+    canvas{border:1px solid #ccc;max-width:100%;height:auto}
+    pre{height:240px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
   </style>
 
   <!-- Local copies (NO CDN) -->
@@ -24,7 +24,7 @@
 <body>
 <div class="wrap">
   <div class="panel">
-    <div style="font-size:12px;color:#666">GitHub Pages • https origin • PDF tarayıcıda kalır</div>
+    <div style="font-size:12px;color:#666">GitHub Pages (https) • PDF dosyası tarayıcıda kalır</div>
 
     <label>PDF seç</label>
     <input id="pdfFile" type="file" accept="application/pdf" />
@@ -50,11 +50,6 @@
 </div>
 
 <script>
-// PDF.js 2.x bazı ortamlarda workerSrc ister; Pages'te worker kullanmadan dummy veriyoruz.
-if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "data:application/javascript,";
-}
-
 let pdfDoc = null;
 let extracted = null;
 
@@ -66,10 +61,17 @@ document.getElementById('extractBtn').addEventListener('click', extract);
 document.getElementById('csvBtn').addEventListener('click', exportCSV);
 document.getElementById('xlsxBtn').addEventListener('click', exportXLSX);
 
+// ✅ Kritik değişiklik:
+// GitHub Pages (https) ortamında worker kullanmak daha stabil.
+// Repo'da pdf.worker.min.js dosyası olmalı.
+if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
+}
+
 async function loadPdf(){
   try{
     log("loadPdf() başladı…");
-    if(!window.pdfjsLib) throw new Error("pdf.min.js yüklenmedi. (Dosya adları aynı klasörde mi?)");
+    if(!window.pdfjsLib) throw new Error("pdf.min.js yüklenmedi.");
     const f = document.getElementById("pdfFile").files[0];
     if(!f) { alert("Önce PDF seç."); return; }
     const buf = await f.arrayBuffer();
@@ -77,14 +79,28 @@ async function loadPdf(){
 
     const loadingTask = pdfjsLib.getDocument({
       data: buf,
-      disableWorker: true,
+      // Worker AÇIK (disableWorker yok)
       disableFontFace: true,
       useSystemFonts: true,
       isEvalSupported: false,
       stopAtErrors: false,
     });
 
-    pdfDoc = await loadingTask.promise;
+    loadingTask.onProgress = (p)=>{
+      try{
+        if(p && p.total){
+          const pct = Math.round((p.loaded/p.total)*100);
+          log("Yükleniyor: " + pct + "%");
+        }
+      }catch(e){}
+    };
+
+    // 15 saniye içinde sonuç yoksa hata verelim (donma gibi görünmesin)
+    const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error(
+      "PDF 15 saniyedir açılmıyor. Büyük ihtimalle pdf.worker.min.js eksik veya erişilemiyor."
+    )),15000));
+
+    pdfDoc = await Promise.race([loadingTask.promise, timeout]);
     log("PDF geladen: " + pdfDoc.numPages + " Seiten");
 
     const page = await pdfDoc.getPage(1);
@@ -145,7 +161,7 @@ function exportXLSX(){
   if(!extracted){ alert("Önce Extract."); return; }
   if(!window.XLSX){ alert("xlsx.full.min.js yüklenmedi."); return; }
   const ws = XLSX.utils.aoa_to_sheet([["Seite","Text"], ...extracted]);
-  const wb = XLSX.utils.book_new();
+  const wb = XLSX.utils.book_new_attach ? XLSX.utils.book_new_attach() : XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "LV");
   XLSX.writeFile(wb, "lv.xlsx");
 }
