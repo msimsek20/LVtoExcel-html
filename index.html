@@ -256,7 +256,7 @@ async function extractLV(){
         if(looksLikePosNr(nrTxt)){
           // flush previous
           if(current){
-            current.beschreibung = current.beschreibung.trim();
+            current.Beschreibung = (current.Beschreibung || '').trim();
             out.push(current);
           }
           current = {
