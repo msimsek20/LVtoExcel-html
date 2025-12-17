@@ -1,53 +1,44 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LV → Excel (DREIPLUS Preset)</title>
+  <title>LVtoExcel</title>
   <style>
     body{font-family:system-ui,Arial,sans-serif;margin:0}
     .wrap{display:grid;grid-template-columns:440px 1fr;gap:12px;height:100vh}
     .panel{padding:12px;border-right:1px solid #ddd;overflow:auto}
     .viewer{padding:12px;overflow:auto}
     label{display:block;font-size:12px;margin-top:10px;color:#333}
-    input,button,select{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
+    input,button{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
     .btnrow{display:flex;gap:8px;margin-top:10px}
     .btnrow button{flex:1}
     canvas{border:1px solid #ccc;max-width:100%;height:auto}
     pre{height:220px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
     .hint{font-size:12px;color:#666;margin-top:6px}
+    h1{font-size:22px;margin:0 0 8px 0}
   </style>
 
-  <!-- Local copies (NO CDN) -->
   <script src="./pdf.min.js"></script>
   <script src="./xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="wrap">
   <div class="panel">
-    <div class="hint">GitHub Pages (https) • DREIPLUS preset • PDF dosyası tarayıcıda kalır</div>
+    <h1>LVtoExcel</h1>
+    <div class="hint">Runs fully in your browser (no upload). Requires HTTPS for PDF.js worker (GitHub Pages / SharePoint).</div>
 
-    <label>PDF seç</label>
+    <label>Select PDF</label>
     <input id="pdfFile" type="file" accept="application/pdf" />
 
-    <label>Preset</label>
-    <select id="preset">
-      <option value="dreiplus" selected>DREIPLUS ZTV / LV-Texte</option>
-    </select>
-
     <div class="btnrow">
-      <button id="loadBtn">PDF laden</button>
-      <button id="extractBtn">LV Extract</button>
+      <button id="loadBtn">Load PDF</button>
+      <button id="extractBtn">Extract LV</button>
     </div>
 
     <div class="btnrow">
       <button id="xlsxBtn">Export XLSX</button>
       <button id="csvBtn">Export CSV</button>
-    </div>
-
-    <div class="hint">
-      Çıktı kolonları: Seite, Pos, Menge, Menge Einheit, EP, GP, Beschreibung<br/>
-      Titel satırları da gelir (sadece Pos + Beschreibung). Footer/alt başlıklar otomatik temizlenir.
     </div>
 
     <label>Log</label>
@@ -61,30 +52,45 @@
 </div>
 
 <script>
+const VERSION = (() => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const m = pad(d.getMonth()+1);
+  const day = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  return `LVtoExcel v${y}${m}${day}_${hh}${mm}`;
+})();
+
 let pdfDoc = null;
 let extractedRows = null;
 
-const logEl = document.getElementById('log');
+const logEl = document.getElementById("log");
 function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
 
-document.getElementById('loadBtn').addEventListener('click', loadPdf);
-document.getElementById('extractBtn').addEventListener('click', extractLV);
-document.getElementById('csvBtn').addEventListener('click', exportCSV);
-document.getElementById('xlsxBtn').addEventListener('click', exportXLSX);
+log(`Welcome! ${VERSION}`);
+log("Tip: Keep pdf.min.js, pdf.worker.min.js, xlsx.full.min.js and index.html in the same folder.");
 
-// ✅ Worker: repo kökünde pdf.worker.min.js olmalı
+document.getElementById("loadBtn").addEventListener("click", loadPdf);
+document.getElementById("extractBtn").addEventListener("click", extractLV);
+document.getElementById("csvBtn").addEventListener("click", exportCSV);
+document.getElementById("xlsxBtn").addEventListener("click", exportXLSX);
+
 if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
+} else {
+  log("ERROR: pdf.min.js not loaded (pdfjsLib missing).");
 }
 
 async function loadPdf(){
   try{
-    log("loadPdf() başladı…");
-    if(!window.pdfjsLib) throw new Error("pdf.min.js yüklenmedi.");
+    log("loadPdf() ...");
+    if(!window.pdfjsLib) throw new Error("pdf.min.js not loaded (pdfjsLib missing).");
     const f = document.getElementById("pdfFile").files[0];
-    if(!f) { alert("Önce PDF seç."); return; }
+    if(!f) { alert("Please select a PDF first."); return; }
     const buf = await f.arrayBuffer();
-    log("PDF boyutu: " + (buf.byteLength/1024/1024).toFixed(2) + " MB");
+    log("PDF size: " + (buf.byteLength/1024/1024).toFixed(2) + " MB");
 
     const loadingTask = pdfjsLib.getDocument({
       data: buf,
@@ -98,19 +104,19 @@ async function loadPdf(){
       try{
         if(p && p.total){
           const pct = Math.round((p.loaded/p.total)*100);
-          log("Yükleniyor: " + pct + "%");
+          log("Loading: " + pct + "%");
         }
       }catch(e){}
     };
 
     pdfDoc = await loadingTask.promise;
-    log("PDF geladen: " + pdfDoc.numPages + " Seiten");
+    log("PDF loaded. Pages: " + pdfDoc.numPages);
 
     await renderPage(1);
-    log("İlk sayfa çizildi.");
+    log("Rendered page 1.");
   }catch(e){
-    log("HATA: " + (e && e.message ? e.message : e));
-    alert("Hata: " + (e && e.message ? e.message : e));
+    log("ERROR: " + (e && e.message ? e.message : e));
+    alert("Error: " + (e && e.message ? e.message : e));
   }
 }
 
@@ -127,13 +133,23 @@ function normText(s){
   return (s||"").replace(/\s+/g," ").trim();
 }
 
-// Build lines from text items based on y coordinate.
+function parseNumberDE(s){
+  s = normText(s);
+  if(!s) return null;
+  s = s.replace(/[^0-9,\.\-]/g,"");
+  if(!s) return null;
+  if(s.indexOf(",") >= 0){
+    s = s.replace(/\./g,"").replace(",", ".");
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 function itemsToLines(items){
   const pts = items
     .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str) }))
     .filter(p => p.s);
 
-  // Sort top->bottom (y desc), then left->right
   pts.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
 
   const lines = [];
@@ -151,12 +167,11 @@ function itemsToLines(items){
     l.parts.sort((a,b)=>a.x-b.x);
     l.text = l.parts.map(pp=>pp.s).join(" ").trim();
   }
+
   lines.sort((a,b)=>b.y-a.y);
   return lines;
 }
 
-// Column cut points (percentage of page width)
-// DREIPLUS table: Nr | Menge/Einheit | EP | GP
 function getCuts(pageWidth){
   return {
     nrMax: pageWidth * 0.22,
@@ -165,62 +180,42 @@ function getCuts(pageWidth){
   };
 }
 
-function parseNumberDE(s){
+function classifyNr(s){
   s = normText(s);
   if(!s) return null;
-  s = s.replace(/[^0-9,\.\-]/g,"");
-  if(!s) return null;
-  if(s.indexOf(",") >= 0){
-    s = s.replace(/\./g,"").replace(",", ".");
-  }
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
+  if(!/^\d[\d\.]*\d$/.test(s)) return null;
+  if(s.indexOf(".") === -1) return null;
+
+  const parts = s.split(".");
+  const last = parts[parts.length-1];
+
+  if(/^\d{4}$/.test(last)) return "pos";
+  return "title";
+}
+
+function isNoiseLine(t){
+  t = normText(t||"");
+  if(!t) return true;
+  const NOISE = [
+    /Fortsetzung/i,
+    /nächster\s+Seite/i,
+    /\bÜbertrag\b/i,
+    /Seite\s+\d+\s+von\s+\d+/i,
+    /\bSeite\b\s+\d+/i
+  ];
+  return NOISE.some(rx => rx.test(t));
 }
 
 function escapeHtml(s){
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
-// ---------- DREIPLUS Extract (Titles + Footer cleanup + Column order) ----------
 async function extractLV(){
   try{
-    if(!pdfDoc){ alert("Önce PDF laden."); return; }
-    log("LV Extract başladı…");
+    if(!pdfDoc){ alert("Load a PDF first."); return; }
+    log("extractLV() ...");
 
     const out = [];
-
-    // Footer/header noise filters
-    const NOISE = [
-      /Fortsetzung/i,
-      /nächster\s+Seite/i,
-      /\bÜbertrag\b/i,
-      /Seite\s+\d+\s+von\s+\d+/i,
-      /DREIPLUS/i,
-      /\bZTV\b/i,
-      /LV-?Texte/i,
-      /KGR\s*\d+/i
-    ];
-
-    function isNoiseText(t){
-      t = normText(t||"");
-      if(!t) return true;
-      if(t.length <= 1) return true;
-      return NOISE.some(rx => rx.test(t));
-    }
-
-    // "pos": ... .0010 (last group 4 digits)
-    // "titel": shorter section number like 1.012.01 or 1.012
-    function classifyNr(s){
-      s = normText(s);
-      if(!s) return null;
-      if(!/^\d[\d\.]*\d$/.test(s)) return null;
-      if(s.indexOf(".") === -1) return null;
-      const parts = s.split(".");
-      const last = parts[parts.length-1];
-      if(/^\d{4}$/.test(last)) return "pos";
-      if((parts.length >= 3 && /^\d{2}$/.test(last)) || parts.length === 2) return "titel";
-      return null;
-    }
 
     for(let p=1;p<=pdfDoc.numPages;p++){
       const page = await pdfDoc.getPage(p);
@@ -230,9 +225,8 @@ async function extractLV(){
       const tc = await page.getTextContent();
       const lines = itemsToLines(tc.items);
 
-      // identify table pages
-      const joined = lines.slice(0,50).map(l=>l.text).join(" | ");
-      const isTablePage = /\bNr\.?\b/i.test(joined) && /Menge\/Einheit/i.test(joined);
+      const joined = lines.slice(0,40).map(l=>l.text).join(" | ");
+      const isTablePage = /\bNr\.?\b/i.test(joined) && /Menge\/Einheit/i.test(joined) && /\bEP\b/i.test(joined);
       if(!isTablePage) continue;
 
       const cuts = getCuts(width);
@@ -247,7 +241,7 @@ async function extractLV(){
       }
 
       for(const l of lines){
-        if(isNoiseText(l.text)) continue;
+        if(isNoiseLine(l.text)) continue;
 
         let nrTxt = "";
         let qtyTxt = "";
@@ -271,12 +265,12 @@ async function extractLV(){
 
         const kind = classifyNr(nrTxt);
 
-        // TITEL row
-        if(kind === "titel"){
+        if(kind === "title"){
           flush();
+
           const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
           const titleText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(titleText && !isNoiseText(titleText)){
+          if(titleText && !isNoiseLine(titleText)){
             out.push({
               Seite: p,
               Pos: nrTxt,
@@ -290,16 +284,15 @@ async function extractLV(){
           continue;
         }
 
-        // NEW POSITION
         if(kind === "pos"){
           flush();
           current = {
             Seite: p,
             Pos: nrTxt,
-            Menge: "",
-            MengeEinheit: "",
-            EP: "",
-            GP: "",
+            Menge: null,
+            MengeEinheit: null,
+            EP: null,
+            GP: null,
             Beschreibung: ""
           };
 
@@ -323,47 +316,32 @@ async function extractLV(){
 
           const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
           const midText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(midText && !isNoiseText(midText)){
-            if(!/^[0-9\s\.,\-]+(\s*[A-Za-z]{1,6})?$/.test(midText)){
+          if(midText && !isNoiseLine(midText)){
+            if(!/^[0-9\s\.,\-]+(\s*[A-Za-z]{0,6})?$/.test(midText)){
               current.Beschreibung += (current.Beschreibung ? " " : "") + midText;
             }
           }
           continue;
         }
 
-        // CONTINUATION
         if(current){
           const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
           const midText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(midText && !isNoiseText(midText)){
+          if(midText && !isNoiseLine(midText)){
             const looksNumeric = /^[0-9\s\.,\-]+$/.test(midText);
             const looksUnitOnly = /^[A-Za-z]{1,6}$/.test(midText);
-            if(!looksNumeric && !looksUnitOnly){
+            if(!looksNumeric && !looksUnitOnly && !/\bEP\b|\bGP\b/i.test(midText)){
               current.Beschreibung += (current.Beschreibung ? " " : "") + midText;
             }
           }
 
-          // fill missing qty/unit/prices
-          if(!current.Menge && qtyTxt){
-            const toks = qtyTxt.split(" ");
-            if(toks.length >= 2){
-              const unit = toks[toks.length-1];
-              const maybeQty = toks.slice(0,-1).join(" ");
-              const q = parseNumberDE(maybeQty);
-              if(q !== null) current.Menge = q;
-              if(!current.MengeEinheit) current.MengeEinheit = unit;
-            }else if(toks.length === 1 && !current.MengeEinheit){
-              current.MengeEinheit = toks[0];
-            }
+          if(current.EP === null){
+            const ep = parseNumberDE(epTxt);
+            if(ep !== null) current.EP = ep;
           }
-
-          if(current.EP === "" || current.EP === null){
-            const ep2 = parseNumberDE(epTxt);
-            if(ep2 !== null) current.EP = ep2;
-          }
-          if(current.GP === "" || current.GP === null){
-            const gp2 = parseNumberDE(gpTxt);
-            if(gp2 !== null) current.GP = gp2;
+          if(current.GP === null){
+            const gp = parseNumberDE(gpTxt);
+            if(gp !== null) current.GP = gp;
           }
         }
       }
@@ -372,50 +350,47 @@ async function extractLV(){
     }
 
     extractedRows = out;
-    log("Bitti. Satır sayısı: " + out.length);
+    log("Done. Rows: " + out.length);
 
-    // Preview
     let html = "<table border='1' style='border-collapse:collapse;font-size:12px'>";
     html += "<tr><th>Seite</th><th>Pos</th><th>Menge</th><th>Menge Einheit</th><th>EP</th><th>GP</th><th>Beschreibung</th></tr>";
     out.slice(0,50).forEach(r=>{
       html += "<tr>" +
-        "<td>"+(r.Seite??"")+"</td>"+
-        "<td>"+escapeHtml(r.Pos??"")+"</td>"+
-        "<td>"+(r.Menge??"")+"</td>"+
-        "<td>"+escapeHtml(r.MengeEinheit??"")+"</td>"+
-        "<td>"+(r.EP??"")+"</td>"+
-        "<td>"+(r.GP??"")+"</td>"+
+        "<td>"+(r.Seite ?? "")+"</td>"+
+        "<td>"+escapeHtml(r.Pos ?? "")+"</td>"+
+        "<td>"+(r.Menge ?? "")+"</td>"+
+        "<td>"+escapeHtml(r.MengeEinheit ?? "")+"</td>"+
+        "<td>"+(r.EP ?? "")+"</td>"+
+        "<td>"+(r.GP ?? "")+"</td>"+
         "<td>"+escapeHtml((r.Beschreibung||"").slice(0,200))+"</td>"+
       "</tr>";
     });
-    html += "</table><div class='hint'>İlk 50 satır gösteriliyor. Export ile tümü iner.</div>";
+    html += "</table><div class='hint'>Showing first 50 rows. Use Export to download all.</div>";
     document.getElementById("out").innerHTML = html;
 
   }catch(e){
-    log("HATA: " + (e && e.message ? e.message : e));
-    alert("Hata: " + (e && e.message ? e.message : e));
+    log("ERROR: " + (e && e.message ? e.message : e));
+    alert("Error: " + (e && e.message ? e.message : e));
   }
 }
 
 function exportCSV(){
-  if(!extractedRows || !extractedRows.length){ alert("Önce LV Extract."); return; }
+  if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
   const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
   const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
   const esc = (v)=>(''+(v??'')).replace(/"/g,'""');
-
   const csv = header.join(",") + "\n" + extractedRows.map(r =>
     cols.map(c => `"${esc(r[c])}"`).join(",")
   ).join("\n");
-
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
-  a.download = "DREIPLUS_LV.csv";
+  a.download = "LVtoExcel.csv";
   a.click();
 }
 
 function exportXLSX(){
-  if(!extractedRows || !extractedRows.length){ alert("Önce LV Extract."); return; }
-  if(!window.XLSX){ alert("xlsx.full.min.js yüklenmedi."); return; }
+  if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
+  if(!window.XLSX){ alert("xlsx.full.min.js not loaded (XLSX missing)."); return; }
 
   const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
   const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
@@ -433,8 +408,8 @@ function exportXLSX(){
   ];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "DREIPLUS_LV");
-  XLSX.writeFile(wb, "DREIPLUS_LV.xlsx");
+  XLSX.utils.book_append_sheet(wb, ws, "LV");
+  XLSX.writeFile(wb, "LVtoExcel.xlsx");
 }
 </script>
 </body>
