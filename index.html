@@ -15,7 +15,7 @@
     .btn:disabled { opacity:.5; cursor:not-allowed; }
     input[type="file"] { padding: 6px; }
     .tiny { font-size: 12px; color: var(--muted); }
-    textarea { width:100%; height: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 10px; border-radius: 10px; border:1px solid var(--border); }
+    textarea { width:100%; height: 170px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 10px; border-radius: 10px; border:1px solid var(--border); }
     table { width:100%; border-collapse: collapse; font-size: 12px; }
     th, td { border:1px solid var(--border); padding: 6px 8px; vertical-align: top; }
     th { background:#f6f8fa; position: sticky; top: 0; z-index: 1; }
@@ -24,8 +24,11 @@
     .canvasWrap { position: relative; border:1px solid var(--border); border-radius: 10px; overflow: hidden; background:#fff; }
     canvas { width:100%; height:auto; display:block; }
     .overlay { position:absolute; inset:0; pointer-events:none; }
-    .guide { position:absolute; top:0; bottom:0; width:2px; background: rgba(255,0,0,0.75); pointer-events:auto; cursor: ew-resize; }
+    .guideV { position:absolute; top:0; bottom:0; width:2px; background: rgba(255,0,0,0.75); pointer-events:auto; cursor: ew-resize; }
+    .guideH { position:absolute; left:0; right:0; height:2px; background: rgba(0,128,255,0.75); pointer-events:auto; cursor: ns-resize; }
     .guideLabel { position:absolute; top:6px; transform: translateX(-50%); background: rgba(255,255,255,0.92); border:1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color:#111; pointer-events:none; }
+    .guideLabelH { position:absolute; left:6px; transform: translateY(-50%); background: rgba(255,255,255,0.92); border:1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color:#111; pointer-events:none; }
+    .zone { position:absolute; left:0; right:0; background: rgba(0,128,255,0.08); pointer-events:none; }
     .kpi { display:flex; gap:10px; flex-wrap:wrap; }
     .pill { border:1px solid var(--border); border-radius:999px; padding:4px 8px; font-size:12px; background:#fff; }
     .warn { color:#b54708; }
@@ -63,6 +66,7 @@
       <span class="pill" id="kpiVersion"></span>
       <span class="pill" id="kpiMode"></span>
       <span class="pill" id="kpiCols"></span>
+      <span class="pill" id="kpiCuts"></span>
     </div>
   </div>
 
@@ -77,7 +81,7 @@
         <div class="overlay" id="overlay"></div>
       </div>
       <div class="tiny" style="margin-top:8px;">
-        Calibration guides split the page into columns (Pos | Qty | Unit | EP | GP | Desc). Drag red lines when enabled.
+        Red lines split columns (Pos | Qty | Unit | EP | GP | Desc). Blue lines set Header/Footer ignore zones.
       </div>
     </div>
 
@@ -108,7 +112,6 @@
   <!-- Local dependencies (must be in same folder) -->
   <script src="./pdf.min.js"></script>
   <script>
-    // pdf.js worker must be local, same folder.
     pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
   </script>
   <script src="./xlsx.full.min.js"></script>
@@ -117,7 +120,7 @@
     // =========================
     // Versioning
     // =========================
-    const VERSION_TAG = "20251218_1140";
+    const VERSION_TAG = "20251218_1157";
 
     // =========================
     // State
@@ -126,13 +129,17 @@
     let currentPage = 1;
     let fileMetaKey = null;
     let extractedRows = [];
-    let preset = null;            // { boundariesNorm: number[] }
-    let sessionGuides = null;     // { boundariesNorm: number[] } (not persisted)
+    let preset = null;            // { boundariesNorm:number[], headerCut:number, footerCut:number }
+    let sessionGuides = null;     // same shape as preset (not persisted)
     let autoModel = null;         // { boundariesNorm, centers, assignmentMode }
 
-    // 6 columns split by 5 vertical boundaries:
-    // [posEnd, qtyEnd, unitEnd, epEnd, gpEnd] normalized to [0..1]
+    // Columns: 6 regions split by 5 vertical boundaries [0..1]
     const DEFAULT_BOUNDARIES = [0.22, 0.34, 0.44, 0.60, 0.72];
+
+    // Header/Footer cuts (normalized y in [0..1], y increases upward in PDF space)
+    // Ignore: yNorm >= headerCut (top zone) and yNorm <= footerCut (bottom zone)
+    const DEFAULT_HEADER_CUT = 0.88;
+    const DEFAULT_FOOTER_CUT = 0.10;
 
     // =========================
     // UI Helpers
@@ -142,19 +149,6 @@
       const ta = $("log");
       ta.value += msg + "\n";
       ta.scrollTop = ta.scrollHeight;
-    }
-    function setKpi() {
-      $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
-      const mode =
-        (sessionGuides && sessionGuides.boundariesNorm) ? "Mode: Session guides" :
-        (preset && preset.boundariesNorm) ? "Mode: Preset boundaries" :
-        "Mode: Auto clustering";
-      $("kpiMode").textContent = mode;
-      const b =
-        (sessionGuides && sessionGuides.boundariesNorm) ? sessionGuides.boundariesNorm :
-        (preset && preset.boundariesNorm) ? preset.boundariesNorm :
-        (autoModel ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES);
-      $("kpiCols").textContent = "Boundaries: " + b.map(v => v.toFixed(2)).join(", ");
     }
     function clearTable() {
       $("tbl").querySelector("tbody").innerHTML = "";
@@ -176,31 +170,57 @@
       }
     }
 
+    function setKpi() {
+      $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
+
+      const mode =
+        (sessionGuides && sessionGuides.boundariesNorm) ? "Mode: Session guides" :
+        (preset && preset.boundariesNorm) ? "Mode: Preset" :
+        "Mode: Auto clustering";
+      $("kpiMode").textContent = mode;
+
+      const b = getActiveBoundariesNorm();
+      $("kpiCols").textContent = "Boundaries: " + b.map(v => v.toFixed(2)).join(", ");
+
+      const cuts = getActiveCuts();
+      $("kpiCuts").textContent = `Cuts: header>=${cuts.headerCut.toFixed(2)} footer<=${cuts.footerCut.toFixed(2)}`;
+    }
+
     // =========================
     // Preset storage
     // =========================
     function makeFileKey(file) {
       return "LVtoExcel:preset:" + [file.name, file.size, file.lastModified].join("|");
     }
+
+    function normalizePreset(obj) {
+      if (!obj || typeof obj !== "object") return null;
+      const boundariesNorm = Array.isArray(obj.boundariesNorm) && obj.boundariesNorm.length === 5 ? obj.boundariesNorm : null;
+      const headerCut = (typeof obj.headerCut === "number") ? obj.headerCut : DEFAULT_HEADER_CUT;
+      const footerCut = (typeof obj.footerCut === "number") ? obj.footerCut : DEFAULT_FOOTER_CUT;
+      if (!boundariesNorm) return null;
+      return { boundariesNorm, headerCut, footerCut };
+    }
+
     function loadPresetForFile() {
       if (!fileMetaKey) return null;
       try {
         const raw = localStorage.getItem(fileMetaKey);
         if (!raw) return null;
-        const obj = JSON.parse(raw);
-        if (obj && Array.isArray(obj.boundariesNorm) && obj.boundariesNorm.length === 5) return obj;
+        return normalizePreset(JSON.parse(raw));
       } catch (_) {}
       return null;
     }
-    function savePresetForFile(boundariesNorm) {
+
+    function savePresetForFile(p) {
       if (!fileMetaKey) return;
-      const obj = { boundariesNorm };
-      localStorage.setItem(fileMetaKey, JSON.stringify(obj));
-      preset = obj;
+      localStorage.setItem(fileMetaKey, JSON.stringify(p));
+      preset = p;
       updatePresetUI();
       setKpi();
       log("Preset saved.");
     }
+
     function clearPresetForFile() {
       if (!fileMetaKey) return;
       localStorage.removeItem(fileMetaKey);
@@ -209,6 +229,7 @@
       setKpi();
       log("Preset cleared.");
     }
+
     function updatePresetUI() {
       if (!fileMetaKey) {
         $("presetInfo").textContent = "";
@@ -228,7 +249,240 @@
     }
 
     // =========================
-    // PDF Preview (independent of extraction)
+    // Guides (vertical columns + horizontal header/footer)
+    // =========================
+    const GUIDE_NAMES_V = ["Pos", "Qty", "Unit", "EP", "GP"];
+    let guidesV = []; // {el,labelEl,idx,normX}
+    let guideHeader = null; // {el,labelEl,normY}
+    let guideFooter = null; // {el,labelEl,normY}
+    let zoneTop = null;
+    let zoneBottom = null;
+
+    function canvasRect() { return $("pdfCanvas").getBoundingClientRect(); }
+
+    function getActiveBoundariesNorm() {
+      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) return sessionGuides.boundariesNorm;
+      if (preset && preset.boundariesNorm) return preset.boundariesNorm;
+      if (autoModel && autoModel.boundariesNorm) return autoModel.boundariesNorm;
+      return DEFAULT_BOUNDARIES;
+    }
+
+    function getActiveCuts() {
+      const headerCut =
+        ($("chkCalib").checked && sessionGuides && typeof sessionGuides.headerCut === "number") ? sessionGuides.headerCut :
+        (preset && typeof preset.headerCut === "number") ? preset.headerCut :
+        DEFAULT_HEADER_CUT;
+      const footerCut =
+        ($("chkCalib").checked && sessionGuides && typeof sessionGuides.footerCut === "number") ? sessionGuides.footerCut :
+        (preset && typeof preset.footerCut === "number") ? preset.footerCut :
+        DEFAULT_FOOTER_CUT;
+      return { headerCut, footerCut };
+    }
+
+    function applyGuides() {
+      const overlay = $("overlay");
+      overlay.innerHTML = "";
+      guidesV = [];
+      guideHeader = null;
+      guideFooter = null;
+
+      const rect = canvasRect();
+      const w = rect.width || 1;
+      const h = rect.height || 1;
+
+      const boundariesNorm = getActiveBoundariesNorm();
+      boundariesNorm.forEach((nx, idx) => {
+        const x = nx * w;
+
+        const line = document.createElement("div");
+        line.className = "guideV";
+        line.style.left = `${x}px`;
+
+        const label = document.createElement("div");
+        label.className = "guideLabel";
+        label.style.left = `${x}px`;
+        label.textContent = GUIDE_NAMES_V[idx];
+
+        overlay.appendChild(line);
+        overlay.appendChild(label);
+
+        guidesV.push({ el: line, labelEl: label, idx, normX: nx });
+      });
+
+      const cuts = getActiveCuts();
+
+      // Header line
+      const yHeader = (1 - cuts.headerCut) * h; // convert yNorm to CSS top (top=0)
+      const headerLine = document.createElement("div");
+      headerLine.className = "guideH";
+      headerLine.style.top = `${yHeader}px`;
+      const headerLabel = document.createElement("div");
+      headerLabel.className = "guideLabelH";
+      headerLabel.style.top = `${yHeader}px`;
+      headerLabel.textContent = "Header cut";
+
+      // Footer line
+      const yFooter = (1 - cuts.footerCut) * h;
+      const footerLine = document.createElement("div");
+      footerLine.className = "guideH";
+      footerLine.style.top = `${yFooter}px`;
+      const footerLabel = document.createElement("div");
+      footerLabel.className = "guideLabelH";
+      footerLabel.style.top = `${yFooter}px`;
+      footerLabel.textContent = "Footer cut";
+
+      // Shaded zones (ignored areas)
+      zoneTop = document.createElement("div");
+      zoneTop.className = "zone";
+      zoneTop.style.top = "0px";
+      zoneTop.style.height = `${Math.max(0, yHeader)}px`;
+
+      zoneBottom = document.createElement("div");
+      zoneBottom.className = "zone";
+      zoneBottom.style.top = `${Math.min(h, yFooter)}px`;
+      zoneBottom.style.height = `${Math.max(0, h - yFooter)}px`;
+
+      overlay.appendChild(zoneTop);
+      overlay.appendChild(zoneBottom);
+      overlay.appendChild(headerLine);
+      overlay.appendChild(headerLabel);
+      overlay.appendChild(footerLine);
+      overlay.appendChild(footerLabel);
+
+      guideHeader = { el: headerLine, labelEl: headerLabel, normY: cuts.headerCut };
+      guideFooter = { el: footerLine, labelEl: footerLabel, normY: cuts.footerCut };
+
+      setGuidesEnabled($("chkCalib").checked);
+      attachGuideDrag();
+    }
+
+    function setGuidesEnabled(enabled) {
+      for (const g of guidesV) {
+        g.el.style.display = enabled ? "block" : "none";
+        g.labelEl.style.display = enabled ? "block" : "none";
+      }
+      if (guideHeader) {
+        guideHeader.el.style.display = enabled ? "block" : "none";
+        guideHeader.labelEl.style.display = enabled ? "block" : "none";
+      }
+      if (guideFooter) {
+        guideFooter.el.style.display = enabled ? "block" : "none";
+        guideFooter.labelEl.style.display = enabled ? "block" : "none";
+      }
+      if (zoneTop) zoneTop.style.display = enabled ? "block" : "none";
+      if (zoneBottom) zoneBottom.style.display = enabled ? "block" : "none";
+      $("btnSavePreset").disabled = !enabled;
+    }
+
+    function getBoundariesFromGuidesV() {
+      const arr = guidesV.map(g => g.normX).slice();
+      const clamped = arr.map(v => Math.max(0.05, Math.min(0.95, v)));
+      clamped.sort((a,b)=>a-b);
+      const minGap = 0.03;
+      for (let i=1;i<clamped.length;i++) {
+        if (clamped[i] - clamped[i-1] < minGap) clamped[i] = clamped[i-1] + minGap;
+      }
+      for (let i=0;i<clamped.length;i++) clamped[i] = Math.max(0.05, Math.min(0.95, clamped[i]));
+      return clamped;
+    }
+
+    function clampCuts(headerCut, footerCut) {
+      // Keep header above footer by margin
+      let h = Math.max(0.30, Math.min(0.98, headerCut));
+      let f = Math.max(0.02, Math.min(0.40, footerCut));
+      const minGap = 0.10;
+      if (h - f < minGap) {
+        // push them apart conservatively
+        const mid = (h + f) / 2;
+        h = Math.min(0.98, mid + minGap/2);
+        f = Math.max(0.02, mid - minGap/2);
+      }
+      return { headerCut: h, footerCut: f };
+    }
+
+    function attachGuideDrag() {
+      // Vertical drag
+      for (const g of guidesV) {
+        g.el.onpointerdown = (ev) => {
+          if (!$("chkCalib").checked) return;
+          ev.preventDefault();
+          g.el.setPointerCapture(ev.pointerId);
+
+          const move = (e) => {
+            const rect = canvasRect();
+            const x = e.clientX - rect.left;
+            const nx = x / Math.max(1, rect.width);
+            g.normX = Math.max(0.02, Math.min(0.98, nx));
+            const px = g.normX * rect.width;
+            g.el.style.left = `${px}px`;
+            g.labelEl.style.left = `${px}px`;
+          };
+
+          const up = () => {
+            const b = getBoundariesFromGuidesV();
+            const cuts = sessionGuides ? clampCuts(sessionGuides.headerCut ?? DEFAULT_HEADER_CUT, sessionGuides.footerCut ?? DEFAULT_FOOTER_CUT) : clampCuts(DEFAULT_HEADER_CUT, DEFAULT_FOOTER_CUT);
+            sessionGuides = { boundariesNorm: b, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
+            applyGuides();
+            setKpi();
+          };
+
+          g.el.onpointermove = move;
+          g.el.onpointerup = up;
+        };
+      }
+
+      // Horizontal drag helper
+      function attachH(guideObj, kind) {
+        if (!guideObj) return;
+        guideObj.el.onpointerdown = (ev) => {
+          if (!$("chkCalib").checked) return;
+          ev.preventDefault();
+          guideObj.el.setPointerCapture(ev.pointerId);
+
+          const move = (e) => {
+            const rect = canvasRect();
+            const y = e.clientY - rect.top;   // 0..h (top-down)
+            const nyDown = y / Math.max(1, rect.height);
+            const yNorm = 1 - nyDown;         // convert to PDF yNorm (bottom=0, top=1)
+            if (kind === "header") guideObj.normY = Math.max(0.30, Math.min(0.98, yNorm));
+            if (kind === "footer") guideObj.normY = Math.max(0.02, Math.min(0.40, yNorm));
+
+            // Visual update
+            const px = (1 - guideObj.normY) * rect.height;
+            guideObj.el.style.top = `${px}px`;
+            guideObj.labelEl.style.top = `${px}px`;
+
+            // zones
+            if (zoneTop) zoneTop.style.height = `${Math.max(0, px)}px`;
+            if (zoneBottom) {
+              zoneBottom.style.top = `${Math.min(rect.height, kind === "footer" ? px : (1 - (sessionGuides?.footerCut ?? DEFAULT_FOOTER_CUT)) * rect.height)}px`;
+              const footerPx = (1 - (kind === "footer" ? guideObj.normY : (sessionGuides?.footerCut ?? DEFAULT_FOOTER_CUT))) * rect.height;
+              zoneBottom.style.top = `${Math.min(rect.height, footerPx)}px`;
+              zoneBottom.style.height = `${Math.max(0, rect.height - footerPx)}px`;
+            }
+          };
+
+          const up = () => {
+            const b = getBoundariesFromGuidesV();
+            const headerCut = (kind === "header") ? guideObj.normY : (sessionGuides?.headerCut ?? DEFAULT_HEADER_CUT);
+            const footerCut = (kind === "footer") ? guideObj.normY : (sessionGuides?.footerCut ?? DEFAULT_FOOTER_CUT);
+            const cuts = clampCuts(headerCut, footerCut);
+            sessionGuides = { boundariesNorm: b, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
+            applyGuides();
+            setKpi();
+          };
+
+          guideObj.el.onpointermove = move;
+          guideObj.el.onpointerup = up;
+        };
+      }
+
+      attachH(guideHeader, "header");
+      attachH(guideFooter, "footer");
+    }
+
+    // =========================
+    // PDF Preview (stable)
     // =========================
     async function renderCurrentPage() {
       if (!pdfDoc) return;
@@ -246,113 +500,14 @@
 
       $("pageInfo").textContent = `Page ${currentPage} / ${pdfDoc.numPages}`;
 
-      // Recompute auto model for this page and update guides (unless user is actively calibrating).
       try {
         const textContent = await page.getTextContent();
         autoModel = buildAutoColumnModel(textContent, viewport.width);
-        const active = getActiveBoundariesNormForPreview();
-        applyGuides(active);
+        applyGuides();
       } catch (e) {
         $("previewWarn").textContent = "Preview model warning: " + (e?.message || String(e));
       }
       setKpi();
-    }
-
-    // =========================
-    // Calibration guides
-    // =========================
-    const GUIDE_NAMES = ["Pos", "Qty", "Unit", "EP", "GP"];
-    let guides = []; // {el,labelEl,idx,normX}
-
-    function overlayRect() {
-      return $("pdfCanvas").getBoundingClientRect();
-    }
-
-    function getActiveBoundariesNormForPreview() {
-      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) return sessionGuides.boundariesNorm;
-      if (preset && preset.boundariesNorm) return preset.boundariesNorm;
-      if (autoModel && autoModel.boundariesNorm) return autoModel.boundariesNorm;
-      return DEFAULT_BOUNDARIES;
-    }
-
-    function applyGuides(boundariesNorm) {
-      const overlay = $("overlay");
-      overlay.innerHTML = "";
-      guides = [];
-      const rect = overlayRect();
-      const w = rect.width || 1;
-
-      boundariesNorm.forEach((nx, idx) => {
-        const x = nx * w;
-
-        const line = document.createElement("div");
-        line.className = "guide";
-        line.style.left = `${x}px`;
-
-        const label = document.createElement("div");
-        label.className = "guideLabel";
-        label.style.left = `${x}px`;
-        label.textContent = GUIDE_NAMES[idx];
-
-        overlay.appendChild(line);
-        overlay.appendChild(label);
-
-        guides.push({ el: line, labelEl: label, idx, normX: nx });
-      });
-
-      setGuidesEnabled($("chkCalib").checked);
-      attachGuideDrag();
-    }
-
-    function setGuidesEnabled(enabled) {
-      for (const g of guides) {
-        g.el.style.display = enabled ? "block" : "none";
-        g.labelEl.style.display = enabled ? "block" : "none";
-      }
-      $("btnSavePreset").disabled = !enabled;
-    }
-
-    function getBoundariesFromGuides() {
-      const arr = guides.map(g => g.normX).slice();
-      const clamped = arr.map(v => Math.max(0.05, Math.min(0.95, v)));
-      clamped.sort((a,b)=>a-b);
-      const minGap = 0.03;
-      for (let i=1;i<clamped.length;i++) {
-        if (clamped[i] - clamped[i-1] < minGap) clamped[i] = clamped[i-1] + minGap;
-      }
-      for (let i=0;i<clamped.length;i++) clamped[i] = Math.max(0.05, Math.min(0.95, clamped[i]));
-      return clamped;
-    }
-
-    function attachGuideDrag() {
-      for (const g of guides) {
-        g.el.onpointerdown = (ev) => {
-          if (!$("chkCalib").checked) return;
-          ev.preventDefault();
-          g.el.setPointerCapture(ev.pointerId);
-
-          const move = (e) => {
-            const rect = overlayRect();
-            const x = e.clientX - rect.left;
-            const nx = x / Math.max(1, rect.width);
-            g.normX = Math.max(0.02, Math.min(0.98, nx));
-            const px = g.normX * rect.width;
-            g.el.style.left = `${px}px`;
-            g.labelEl.style.left = `${px}px`;
-          };
-
-          const up = () => {
-            const b = getBoundariesFromGuides();
-            // Session-only guide override (until saved)
-            sessionGuides = { boundariesNorm: b };
-            applyGuides(b);
-            setKpi();
-          };
-
-          g.el.onpointermove = move;
-          g.el.onpointerup = up;
-        };
-      }
     }
 
     // =========================
@@ -384,7 +539,6 @@
       if (xs.length < 30) {
         return { boundariesNorm: DEFAULT_BOUNDARIES.slice(), centers: [], assignmentMode: "fallback" };
       }
-
       xs.sort((a,b)=>a-b);
 
       // Greedy 1D clustering
@@ -410,45 +564,44 @@
       const q = (p) => xs[Math.floor((xs.length-1)*p)];
       const quant = [q(0.18), q(0.32), q(0.44), q(0.62), q(0.78)];
       const boundariesPx = quant.map(v => snapToGap(v, keptCenters, pageWidthPx));
-      const boundariesNorm = boundariesPx.map(v => clamp01(v / Math.max(1, pageWidthPx)));
+      let boundariesNorm = boundariesPx.map(v => clamp01(v / Math.max(1, pageWidthPx)));
 
-      // Enforce ordering and minimum gaps
       boundariesNorm.sort((a,b)=>a-b);
       const minGap = 0.03;
       for (let i=1;i<boundariesNorm.length;i++) {
         if (boundariesNorm[i] - boundariesNorm[i-1] < minGap) boundariesNorm[i] = boundariesNorm[i-1] + minGap;
       }
-      for (let i=0;i<boundariesNorm.length;i++) boundariesNorm[i] = clamp01(boundariesNorm[i]);
+      boundariesNorm = boundariesNorm.map(clamp01);
 
       return { boundariesNorm, centers: keptCenters, assignmentMode: "auto" };
     }
 
     // =========================
-    // Parsing primitives (token-based, robust)
+    // Parsing primitives
     // =========================
-    function escapeRegex(s) {
-      return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-
-    function normalizeSpaces(s) {
-      return (s || "").replace(/\s+/g, " ").trim();
-    }
+    function normalizeSpaces(s) { return (s || "").replace(/\s+/g, " ").trim(); }
 
     function stripOuterPunct(token) {
       let t = (token || "").trim();
-      // Remove leading/trailing punctuation but keep dots inside codes.
       t = t.replace(/^[\(\[\{<]+/, "").replace(/[\)\]\}>]+$/, "");
       t = t.replace(/^[,:;]+/, "").replace(/[,:;]+$/, "");
       return t;
     }
 
-    function isDottedNumericCode(t) {
-      const s = t.trim();
-      return /^\d+(?:\.\d+)+$/.test(s);
+    function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+    function removeTokenOnceByWhitespaceBoundary(text, token) {
+      if (!text || !token) return text;
+      const re = new RegExp("(^|\\s)" + escapeRegex(token) + "(?=\\s|$)");
+      return text.replace(re, "$1").replace(/\s+/g, " ").trim();
     }
 
-    function endsWithFourDigits(code) {
-      return /\.\d{4}$/.test(code);
+    function isDottedNumericCode(t) { return /^\d+(?:\.\d+)+$/.test(t.trim()); }
+    function endsWithFourDigits(code) { return /\.\d{4}$/.test(code.trim()); }
+
+    function isTitleCode(code) {
+      if (!isDottedNumericCode(code)) return false;
+      return !endsWithFourDigits(code);
     }
 
     function isPosToken(token) {
@@ -460,49 +613,35 @@
       return false;
     }
 
-    function isTitleCode(code) {
-      // Title/Section rule: dotted numeric code but NOT ending with 4 digits
-      if (!isDottedNumericCode(code)) return false;
-      return !endsWithFourDigits(code);
+    function isIntegerPosCandidate(token) {
+      const t = token.trim();
+      return /^\d{1,6}$/.test(t);
     }
 
     function parseMoneyToken(token) {
-      // Accept 2-3 decimals, optional currency symbol, thousands separators.
       if (!token) return null;
       let t = token.replace(/\s+/g, "");
-      // Remove common currency marks without hardcoding any language words.
       t = t.replace(/[€$£]/g, "");
-      // Must contain digits
       if (!/\d/.test(t)) return null;
 
-      // If both dot and comma exist: assume dot thousands, comma decimal.
       if (t.includes(".") && t.includes(",")) {
         t = t.replace(/\./g, "");
-        // Keep last comma as decimal separator.
         const m = t.match(/^(\d+),(\d{2,3})$/);
         if (!m) return null;
         return m[1] + "." + m[2];
       }
-
-      // Comma decimal
       if (t.includes(",")) {
-        // Remove thousands dots just in case (rare in this branch)
         t = t.replace(/\./g, "");
         const m = t.match(/^(\d+),(\d{2,3})$/);
         if (!m) return null;
         return m[1] + "." + m[2];
       }
-
-      // Dot decimal
       const m = t.match(/^(\d+)\.(\d{2,3})$/);
       if (m) return m[1] + "." + m[2];
-
-      // Integer is not money here
       return null;
     }
 
     function isQtyToken(token) {
-      // Quantity can be integer or 1-3 decimals (including 2 decimals).
       if (!token) return false;
       const t = token.replace(/\s+/g, "");
       if (/^\d+$/.test(t)) return true;
@@ -511,48 +650,44 @@
     }
 
     function isLikelyUnitToken(token) {
-      // Unit: short non-numeric token, mostly letters/symbols, in the Unit column.
       if (!token) return false;
       const t = stripOuterPunct(token);
       if (!t) return false;
       if (/\d/.test(t)) {
-        // Allow units like m2, m3, m², m³, kg, etc.
         if (/^(m2|m3|m²|m³|cm|mm|m|kg|t|h|l)$/i.test(t)) return true;
         return false;
       }
       if (/^(m2|m3|m²|m³|cm|mm|m|kg|t|h|l)$/i.test(t)) return true;
-      // Generic short unit token: letters (unicode) or micro sign and superscripts
       try {
         if (/^[\p{L}µ²³\/]{1,10}$/u.test(t)) return true;
       } catch (_) {
-        // Fallback without unicode properties
         if (/^[A-Za-zµ²³\/]{1,10}$/.test(t)) return true;
       }
       return false;
     }
 
-    function removeTokenOnceByWhitespaceBoundary(text, token) {
-      if (!text || !token) return text;
-      const re = new RegExp("(^|\\s)" + escapeRegex(token) + "(?=\\s|$)");
-      return text.replace(re, "$1").replace(/\s+/g, " ").trim();
-    }
-
     function dotRatio(text) {
-      if (!text) return 0;
-      const dots = (text.match(/\./g) || []).length;
-      return dots / Math.max(1, text.length);
+      const t = text || "";
+      const dots = (t.match(/\./g) || []).length;
+      return dots / Math.max(1, t.length);
     }
-
     function isLeaderLine(text) {
-      // Mostly dots (leaders) with minimal payload
       const t = normalizeSpaces(text);
       if (!t) return true;
       if (dotRatio(t) > 0.25 && t.length > 10) return true;
       return false;
     }
 
+    function isMeaningfulTextForDesc(text) {
+      const t = normalizeSpaces(text);
+      if (!t) return false;
+      if (isLeaderLine(t) && !/[A-Za-z]/.test(t)) return false;
+      if (/^[\.\-_:;]+$/.test(t)) return false;
+      return true;
+    }
+
     // =========================
-    // Line building
+    // Line building (adaptive y tolerance)
     // =========================
     function median(arr) {
       if (!arr.length) return 0;
@@ -571,7 +706,6 @@
         const x = it.transform[4];
         const y = it.transform[5];
         const w = it.width || 0;
-        // Approx font height from transform[3] if available.
         const h = Math.abs(it.transform[3] || it.height || 0);
         if (h > 1 && h < 60) heights.push(h);
         enriched.push({ str, x, y, w, xMid: x + w*0.5, h });
@@ -580,13 +714,13 @@
       enriched.sort((a,b)=> b.y - a.y || a.x - b.x);
 
       const medH = median(heights) || 10;
-      const yTol = Math.max(2.5, Math.min(10, medH * 0.35));
+      const yTol = Math.max(2.5, Math.min(12, medH * 0.45));
 
       const lines = [];
       for (const e of enriched) {
         const last = lines[lines.length-1];
         if (!last || Math.abs(last.y - e.y) > yTol) {
-          lines.push({ y: e.y, yNorm: pageHeight ? (e.y / pageHeight) : 0, items: [e] });
+          lines.push({ y: e.y, yNorm: e.y / Math.max(1, pageHeight), items: [e] });
         } else {
           last.items.push(e);
         }
@@ -598,12 +732,9 @@
     // =========================
     // Column assignment
     // =========================
-    function boundariesPx(boundariesNorm, pageWidth) {
-      return boundariesNorm.map(v => v * pageWidth);
-    }
+    function boundariesPx(boundariesNorm, pageWidth) { return boundariesNorm.map(v => v * pageWidth); }
 
     function regionIndexForX(xMid, bPx) {
-      // 6 regions: 0=pos,1=qty,2=unit,3=ep,4=gp,5=desc
       if (xMid < bPx[0]) return 0;
       if (xMid < bPx[1]) return 1;
       if (xMid < bPx[2]) return 2;
@@ -612,7 +743,7 @@
       return 5;
     }
 
-    function splitToTokensPreserve(str) {
+    function splitToTokens(str) {
       return normalizeSpaces(str).split(" ").filter(Boolean);
     }
 
@@ -625,73 +756,9 @@
       return regions;
     }
 
-    function findPosCandidate(line, bPx, pageWidth) {
-      // Search in first two regions, token-based (robust against boundary drift).
-      const regions = lineRegions(line, bPx);
-      const candidates = [];
-
-      function pushFromItems(items) {
-        for (const it of items) {
-          const toks = splitToTokensPreserve(it.str);
-          for (const raw of toks) {
-            const tok = stripOuterPunct(raw);
-            if (!tok) continue;
-            if (!isPosToken(tok)) continue;
-            // Score: prefer dotted codes ending with 4 digits, and leftmost items.
-            let score = 0;
-            if (isDottedNumericCode(tok) && endsWithFourDigits(tok)) score += 100;
-            else if (isDottedNumericCode(tok)) score += 70;
-            else if (/^\d{1,6}$/.test(tok)) score += 50;
-            else score += 40;
-            // Left bias
-            score += Math.max(0, 30 - (it.x / Math.max(1, pageWidth)) * 30);
-            candidates.push({ tok, score, x: it.x });
-          }
-        }
-      }
-
-      pushFromItems(regions[0]);
-      pushFromItems(regions[1]);
-
-      if (candidates.length === 0) {
-        // Fallback: scan first few leftmost items on the line (layout-agnostic).
-        const leftMost = line.items.slice(0, Math.min(6, line.items.length));
-        pushFromItems(leftMost);
-      }
-
-      if (candidates.length === 0) return null;
-
-      candidates.sort((a,b)=> b.score - a.score || a.x - b.x);
-      return candidates[0].tok;
-    }
-
-    function findQtyToken(regions) {
-      const items = regions[1] || [];
-      for (const it of items) {
-        for (const raw of splitToTokensPreserve(it.str)) {
-          const tok = stripOuterPunct(raw);
-          if (!tok) continue;
-          if (isQtyToken(tok)) return tok;
-        }
-      }
-      return "";
-    }
-
-    function findUnitToken(regions) {
-      const items = regions[2] || [];
-      for (const it of items) {
-        for (const raw of splitToTokensPreserve(it.str)) {
-          const tok = stripOuterPunct(raw);
-          if (!tok) continue;
-          if (isLikelyUnitToken(tok)) return tok;
-        }
-      }
-      return "";
-    }
-
-    function findMoneyInRegion(items) {
+    function findMoneyInItems(items) {
       for (const it of (items || [])) {
-        for (const raw of splitToTokensPreserve(it.str)) {
+        for (const raw of splitToTokens(it.str)) {
           const tok = stripOuterPunct(raw);
           const m = parseMoneyToken(tok);
           if (m) return { raw: tok, norm: m };
@@ -700,11 +767,28 @@
       return null;
     }
 
+    function findQtyToken(regions) {
+      for (const it of (regions[1] || [])) {
+        for (const raw of splitToTokens(it.str)) {
+          const tok = stripOuterPunct(raw);
+          if (tok && isQtyToken(tok)) return tok;
+        }
+      }
+      return "";
+    }
+
+    function findUnitToken(regions) {
+      for (const it of (regions[2] || [])) {
+        for (const raw of splitToTokens(it.str)) {
+          const tok = stripOuterPunct(raw);
+          if (tok && isLikelyUnitToken(tok)) return tok;
+        }
+      }
+      return "";
+    }
+
     function findMoneyByLabel(lineText, label) {
-      // Label-driven search (EP/GP). No language dependency.
       const t = normalizeSpaces(lineText);
-      if (!t) return null;
-      // If label occurs, look for the first money-like token after it.
       const idx = t.indexOf(label);
       if (idx < 0) return null;
       const after = t.slice(idx + label.length);
@@ -716,28 +800,74 @@
       return null;
     }
 
+    function findPosCandidate(line, bPx, pageWidth, fullText) {
+      const regions = lineRegions(line, bPx);
+      const candidates = [];
+
+      const dinOnLine = /\bDIN\b/i.test(fullText);
+
+      function pushFromItems(items, regionIdx) {
+        for (const it of items) {
+          const toks = splitToTokens(it.str);
+          for (const raw of toks) {
+            const tok = stripOuterPunct(raw);
+            if (!tok) continue;
+            if (!isPosToken(tok)) continue;
+
+            // Reject DIN-only integers like 18533 when DIN is on the same line
+            if (dinOnLine && isIntegerPosCandidate(tok) && tok.length >= 4) continue;
+
+            // Score
+            let score = 0;
+            if (isDottedNumericCode(tok) && endsWithFourDigits(tok)) score += 120;
+            else if (isDottedNumericCode(tok)) score += 80;
+            else if (isIntegerPosCandidate(tok)) score += 30; // keep low priority
+            else score += 40;
+
+            // Left bias
+            score += Math.max(0, 25 - (it.x / Math.max(1, pageWidth)) * 25);
+
+            // Region bias
+            if (regionIdx === 0) score += 15;
+            if (regionIdx === 1) score += 5;
+
+            candidates.push({ tok, score, x: it.x });
+          }
+        }
+      }
+
+      pushFromItems(regions[0], 0);
+      pushFromItems(regions[1], 1);
+
+      if (candidates.length === 0) {
+        const leftMost = line.items.slice(0, Math.min(6, line.items.length));
+        pushFromItems(leftMost, 0);
+      }
+
+      if (!candidates.length) return null;
+      candidates.sort((a,b)=> b.score - a.score || a.x - b.x);
+      return candidates[0].tok;
+    }
+
     // =========================
-    // Noise filtering (language-agnostic, repetition-based)
+    // Noise filter (manual cuts are primary; repetition filter is secondary)
     // =========================
     async function buildNoiseSet(doc) {
-      const occurrences = new Map(); // key -> count
-      const topThresh = 0.82;
-      const bottomThresh = 0.10;
+      const occurrences = new Map();
+      const topThresh = 0.90;
+      const bottomThresh = 0.08;
 
       for (let p=1; p<=doc.numPages; p++) {
         const page = await doc.getPage(p);
         const viewport = page.getViewport({ scale: 1.0 });
         const textContent = await page.getTextContent();
         const { lines } = groupItemsIntoLines(textContent.items || [], viewport.height);
-
         for (const ln of lines) {
-          const yNorm = ln.y / Math.max(1, viewport.height);
+          const yNorm = ln.yNorm;
           if (!(yNorm >= topThresh || yNorm <= bottomThresh)) continue;
-          const raw = ln.items.map(x => x.str).join(" ");
-          const key = normalizeSpaces(raw).toLowerCase();
+          const key = normalizeSpaces(ln.items.map(x => x.str).join(" ")).toLowerCase();
           if (!key) continue;
-          // Skip extremely long blocks
-          if (key.length > 140) continue;
+          if (key.length > 160) continue;
           occurrences.set(key, (occurrences.get(key) || 0) + 1);
         }
       }
@@ -750,15 +880,8 @@
     }
 
     // =========================
-    // Extraction core (with fail-safe fallback)
+    // Extraction (fail-safe fallback + header/footer cuts)
     // =========================
-    function getPrimaryExtractionMode() {
-      // Priority: session guides (when checkbox is on) > preset > auto
-      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) return { type: "session", boundariesNorm: sessionGuides.boundariesNorm };
-      if (preset && preset.boundariesNorm) return { type: "preset", boundariesNorm: preset.boundariesNorm };
-      return { type: "auto", boundariesNorm: null };
-    }
-
     function makeRow(seite, pos, qty, unit, ep, gp, desc) {
       return {
         "Seite": seite ?? "",
@@ -778,38 +901,39 @@
       return null;
     }
 
-    function isMeaningfulTextForDesc(text) {
-      const t = normalizeSpaces(text);
-      if (!t) return false;
-      // Ignore heavy leader-only lines
-      if (isLeaderLine(t) && !/[A-Za-z]/.test(t)) return false;
-      // Ignore very short pure punctuation
-      if (/^[\.\-_:;]+$/.test(t)) return false;
-      return true;
+    function getPrimaryMode() {
+      // Column boundaries: session > preset > auto
+      // Cuts: session > preset > defaults
+      const cuts = getActiveCuts();
+      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) {
+        return { type: "session", boundariesNorm: sessionGuides.boundariesNorm, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
+      }
+      if (preset && preset.boundariesNorm) {
+        return { type: "preset", boundariesNorm: preset.boundariesNorm, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
+      }
+      return { type: "auto", boundariesNorm: null, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
     }
 
-    function lineToText(line) {
-      return normalizeSpaces(line.items.map(x => x.str).join(" "));
+    function shouldIgnoreLineByCuts(yNorm, headerCut, footerCut) {
+      if (yNorm >= headerCut) return true;
+      if (yNorm <= footerCut) return true;
+      return false;
     }
 
-    function extractFromDocWithMode(mode, noiseSet) {
-      // mode: { type: "session"|"preset"|"auto"|"forceAuto", boundariesNorm: number[]|null }
+    function extractContext(mode, noiseSet) {
       const rows = [];
       let openPos = null;
 
-      // This function is called from an async loop, but kept sync for clarity.
-      // It relies on the caller to supply per-page lines and page models.
       function processPage(p, viewport, textContent, pageModel) {
-        const activeBoundariesNorm =
-          (mode.type === "session" || mode.type === "preset") ? mode.boundariesNorm :
-          pageModel.boundariesNorm;
-
-        const bPx = boundariesPx(activeBoundariesNorm, viewport.width);
+        const boundariesNorm = (mode.type === "session" || mode.type === "preset") ? mode.boundariesNorm : pageModel.boundariesNorm;
+        const bPx = boundariesPx(boundariesNorm, viewport.width);
 
         const grouped = groupItemsIntoLines(textContent.items || [], viewport.height);
         const lines = grouped.lines;
 
         for (const ln of lines) {
+          if (shouldIgnoreLineByCuts(ln.yNorm, mode.headerCut, mode.footerCut)) continue;
+
           const raw = ln.items.map(x => x.str).join(" ");
           const key = normalizeSpaces(raw).toLowerCase();
           if (noiseSet && noiseSet.has(key)) continue;
@@ -817,53 +941,58 @@
           const fullText = normalizeSpaces(raw);
           if (!fullText) continue;
 
-          // Regions for field extraction
           const regions = lineRegions(ln, bPx);
 
-          // Token-based pos detection (robust)
-          const posTok = findPosCandidate(ln, bPx, viewport.width);
-
-          // Detect qty/unit/price signals (used for override decisions)
+          // Field signals
           const qtyTok = findQtyToken(regions);
           const unitTok = findUnitToken(regions);
-          const epInCol = findMoneyInRegion(regions[3]);
-          const gpInCol = findMoneyInRegion(regions[4]);
-
+          const epInCol = findMoneyInItems(regions[3]);
+          const gpInCol = findMoneyInItems(regions[4]);
           const epByLabel = findMoneyByLabel(fullText, "EP");
           const gpByLabel = findMoneyByLabel(fullText, "GP");
-
           const hasQtyOrPriceSignal = Boolean(qtyTok || unitTok || epInCol || gpInCol || epByLabel || gpByLabel);
 
+          // Pos candidate (token-based, with DIN integer guard)
+          const posTok = findPosCandidate(ln, bPx, viewport.width, fullText);
+
+          // Title/Position decision
           if (posTok) {
             const titleLike = isTitleCode(posTok);
-            const posLikeStrong = isDottedNumericCode(posTok) && endsWithFourDigits(posTok);
-            const posLike = !titleLike || (titleLike && hasQtyOrPriceSignal); // override: short dotted + qty/price => position
 
-            if (posLikeStrong || posLike) {
-              // Start a new position OR a title row depending on titleLike and override.
+            // Integer pos candidates are only allowed when there is strong table signal and the token is truly "left"
+            if (isIntegerPosCandidate(posTok) && posTok.length >= 4) {
+              // Require qty/price signal and being in leftmost region visually
+              if (!hasQtyOrPriceSignal) {
+                // treat as normal text
+              } else {
+                // allow as position (rare)
+              }
+            }
+
+            const posStrong = isDottedNumericCode(posTok) && endsWithFourDigits(posTok);
+            const treatAsPosition = posStrong || (!titleLike) || (titleLike && hasQtyOrPriceSignal);
+
+            if (treatAsPosition) {
               if (titleLike && !hasQtyOrPriceSignal) {
-                // Title/Section row (only Pos and Beschreibung filled)
+                // Title/Section row: only Pos + Beschreibung
                 openPos = flushOpenPosition(openPos, rows);
-                let descLine = fullText;
-                descLine = removeTokenOnceByWhitespaceBoundary(descLine, posTok);
+                let descLine = removeTokenOnceByWhitespaceBoundary(fullText, posTok);
                 rows.push(makeRow("", posTok, "", "", "", "", descLine));
                 continue;
               }
 
-              // New position row
+              // New position
               openPos = flushOpenPosition(openPos, rows);
               openPos = { pageStart: p, pos: posTok, qty: "", unit: "", ep: "", gp: "", descLines: [] };
 
-              // Set fields from this line if present
               if (qtyTok) openPos.qty = qtyTok.replace(/\s+/g,"").trim();
               if (unitTok) openPos.unit = unitTok.trim();
-
               const epNorm = epInCol ? epInCol.norm : (epByLabel || "");
               const gpNorm = gpInCol ? gpInCol.norm : (gpByLabel || "");
               if (epNorm) openPos.ep = epNorm;
               if (gpNorm) openPos.gp = gpNorm;
 
-              // Description line: remove field tokens from the full line text
+              // Description from same line
               let descLine = fullText;
               descLine = removeTokenOnceByWhitespaceBoundary(descLine, posTok);
               if (qtyTok) descLine = removeTokenOnceByWhitespaceBoundary(descLine, qtyTok);
@@ -871,23 +1000,16 @@
               if (epInCol && epInCol.raw) descLine = removeTokenOnceByWhitespaceBoundary(descLine, epInCol.raw);
               if (gpInCol && gpInCol.raw) descLine = removeTokenOnceByWhitespaceBoundary(descLine, gpInCol.raw);
 
-              // Do not drop embedded patterns like "20cm" (removal uses whitespace boundaries)
               if (isMeaningfulTextForDesc(descLine)) openPos.descLines.push(descLine);
               continue;
             }
           }
 
-          // Continuation lines
+          // Continuation line
           if (openPos) {
-            // Fill missing qty/unit
-            if (!openPos.qty) {
-              if (qtyTok) openPos.qty = qtyTok.replace(/\s+/g,"").trim();
-            }
-            if (!openPos.unit) {
-              if (unitTok) openPos.unit = unitTok.trim();
-            }
+            if (!openPos.qty && qtyTok) openPos.qty = qtyTok.replace(/\s+/g,"").trim();
+            if (!openPos.unit && unitTok) openPos.unit = unitTok.trim();
 
-            // Fill EP/GP
             if (!openPos.ep) {
               const epNorm = epInCol ? epInCol.norm : (epByLabel || "");
               if (epNorm) openPos.ep = epNorm;
@@ -897,10 +1019,7 @@
               if (gpNorm) openPos.gp = gpNorm;
             }
 
-            // Append description unless it's a pure leader line
-            // Keep single-word lines (requirement)
             if (isMeaningfulTextForDesc(fullText)) {
-              // If line is mostly leaders and was only used to capture price, skip adding to description.
               const usedForMoneyOnly = (isLeaderLine(fullText) && (epByLabel || gpByLabel || epInCol || gpInCol));
               if (!usedForMoneyOnly) openPos.descLines.push(fullText);
             }
@@ -911,37 +1030,34 @@
       return { rows, processPage, flush: () => { openPos = flushOpenPosition(openPos, rows); return rows; } };
     }
 
-    async function extractAllPagesWithFailSafe() {
-      if (!pdfDoc) return [];
+    async function runExtraction(mode, noiseSet, label) {
+      log("Extraction run: " + label);
+      const ctx = extractContext(mode, noiseSet);
 
+      for (let p=1; p<=pdfDoc.numPages; p++) {
+        const page = await pdfDoc.getPage(p);
+        const viewport = page.getViewport({ scale: 1.0 });
+        const textContent = await page.getTextContent();
+        const pageModel = buildAutoColumnModel(textContent, viewport.width);
+        ctx.processPage(p, viewport, textContent, pageModel);
+      }
+      return ctx.flush();
+    }
+
+    async function extractAllPagesWithFailSafe() {
       const noiseSet = await buildNoiseSet(pdfDoc);
       log("Noise filter built. Entries: " + noiseSet.size);
 
-      const primary = getPrimaryExtractionMode();
-      const runOnce = async (mode, label) => {
-        log("Extraction run: " + label);
-        const ctx = extractFromDocWithMode(mode, noiseSet);
+      const primary = getPrimaryMode();
 
-        for (let p=1; p<=pdfDoc.numPages; p++) {
-          const page = await pdfDoc.getPage(p);
-          const viewport = page.getViewport({ scale: 1.0 });
-          const textContent = await page.getTextContent();
-          const pageModel = buildAutoColumnModel(textContent, viewport.width);
-          ctx.processPage(p, viewport, textContent, pageModel);
-        }
-        return ctx.flush();
-      };
+      // Primary run
+      let rows = await runExtraction(primary, noiseSet, primary.type === "auto" ? "auto clustering" : primary.type);
 
-      // 1) Primary run (session guides / preset / auto)
-      let rows = await runOnce(
-        primary.type === "auto" ? { type:"auto", boundariesNorm:null } : primary,
-        primary.type === "auto" ? "auto clustering" : primary.type
-      );
-
-      // 2) Fail-safe: if rows == 0, retry with forced auto clustering (ignore preset/guides)
+      // Fail-safe: if rows==0, retry with forced auto boundaries but KEEP user cuts (header/footer) because those are always helpful.
       if (rows.length === 0) {
-        log("Zero rows detected. Retrying with auto clustering (ignoring preset/guides)...");
-        rows = await runOnce({ type:"auto", boundariesNorm:null }, "auto clustering (fail-safe)");
+        log("Zero rows detected. Retrying with auto clustering (ignoring column preset/guides, keeping header/footer cuts)...");
+        const forced = { type: "auto", boundariesNorm: null, headerCut: primary.headerCut, footerCut: primary.footerCut };
+        rows = await runExtraction(forced, noiseSet, "auto clustering (fail-safe)");
       }
 
       return rows;
@@ -967,8 +1083,6 @@
     // =========================
     (function init() {
       $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
-      $("kpiMode").textContent = "Mode: -";
-      $("kpiCols").textContent = "Boundaries: -";
       log("Ready. VERSION_TAG=" + VERSION_TAG);
 
       $("fileInput").addEventListener("change", () => {
@@ -982,6 +1096,7 @@
         extractedRows = [];
         preset = null;
         sessionGuides = null;
+        autoModel = null;
         clearTable();
 
         if (f) {
@@ -1008,7 +1123,6 @@
           $("btnNext").disabled = false;
           $("btnExtract").disabled = false;
 
-          // Render preview immediately
           await renderCurrentPage();
 
           updatePresetUI();
@@ -1035,37 +1149,38 @@
         setGuidesEnabled(enabled);
 
         if (enabled) {
-          // Initialize session guides from preset or auto/default
+          // Initialize session guides from preset/auto/default (includes cuts)
           const b = (preset && preset.boundariesNorm) ? preset.boundariesNorm
                   : (autoModel && autoModel.boundariesNorm) ? autoModel.boundariesNorm
                   : DEFAULT_BOUNDARIES;
-          sessionGuides = { boundariesNorm: b.slice() };
-          applyGuides(sessionGuides.boundariesNorm);
+          const cuts = getActiveCuts();
+          sessionGuides = { boundariesNorm: b.slice(), headerCut: cuts.headerCut, footerCut: cuts.footerCut };
         } else {
           sessionGuides = null;
-          applyGuides(getActiveBoundariesNormForPreview());
         }
 
+        applyGuides();
         updatePresetUI();
         setKpi();
       });
 
       $("btnSavePreset").addEventListener("click", () => {
         if (!$("chkCalib").checked) return;
-        const b = getBoundariesFromGuides();
-        // Save preset; keep session guides active as well.
-        savePresetForFile(b);
-        sessionGuides = { boundariesNorm: b.slice() };
-        applyGuides(b);
+        const b = getBoundariesFromGuidesV();
+        const headerCut = sessionGuides?.headerCut ?? getActiveCuts().headerCut;
+        const footerCut = sessionGuides?.footerCut ?? getActiveCuts().footerCut;
+        const cuts = clampCuts(headerCut, footerCut);
+        const p = { boundariesNorm: b, headerCut: cuts.headerCut, footerCut: cuts.footerCut };
+        savePresetForFile(p);
+        sessionGuides = { ...p };
+        applyGuides();
         setKpi();
       });
 
       $("btnClearPreset").addEventListener("click", () => {
         clearPresetForFile();
-        // Do not touch session guides unless calibration is off
         if (!$("chkCalib").checked) sessionGuides = null;
-        const b = getActiveBoundariesNormForPreview();
-        applyGuides(b);
+        applyGuides();
         setKpi();
       });
 
@@ -1075,7 +1190,7 @@
         extractedRows = [];
         clearTable();
 
-        // Refresh preset from storage (in case file key changed)
+        // Refresh preset from storage
         preset = loadPresetForFile();
 
         setKpi();
@@ -1093,8 +1208,8 @@
 
       $("btnExport").addEventListener("click", exportXlsx);
 
-      // Initial guides (hidden until enabled)
-      applyGuides(DEFAULT_BOUNDARIES);
+      // Initial overlay
+      applyGuides();
       setGuidesEnabled(false);
       updatePresetUI();
       setKpi();
