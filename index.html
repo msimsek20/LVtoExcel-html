@@ -2,379 +2,344 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LVtoExcel</title>
   <style>
-    body{font-family:system-ui,Arial,sans-serif;margin:0}
-    .wrap{display:grid;grid-template-columns:460px 1fr;gap:12px;height:100vh}
-    .panel{padding:12px;border-right:1px solid #ddd;overflow:auto}
-    .viewer{padding:12px;overflow:auto}
-    label{display:block;font-size:12px;margin-top:10px;color:#333}
-    input,button{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
-    .btnrow{display:flex;gap:8px;margin-top:10px}
-    .btnrow button{flex:1}
-    canvas{border:1px solid #ccc;max-width:100%;height:auto}
-    pre{height:230px;overflow:auto;border:1px solid #ccc;background:#fff;padding:8px}
-    .hint{font-size:12px;color:#666;margin-top:6px}
-    h1{font-size:22px;margin:0 0 8px 0}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:18px;color:#111}
+    h1{font-size:18px;margin:0 0 10px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin-top:12px}
+    button{padding:8px 12px;border-radius:8px;border:1px solid #bbb;background:#f7f7f7;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    input[type=file]{border:1px solid #bbb;padding:8px;border-radius:8px;background:#fff}
+    #log{width:100%;height:140px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid #ddd;padding:6px;vertical-align:top}
+    th{background:#fafafa;position:sticky;top:0}
+    .muted{color:#666;font-size:12px}
   </style>
-
-  <!-- Local copies (NO CDN) -->
-  <script src="./pdf.min.js"></script>
-  <script src="./xlsx.full.min.js"></script>
 </head>
 <body>
-<div class="wrap">
-  <div class="panel">
-    <h1>LVtoExcel</h1>
-    <div class="hint">
-      Runs fully in your browser (no upload). Keep these files in the same folder:
-      <b>index.html</b>, <b>pdf.min.js</b>, <b>pdf.worker.min.js</b>, <b>xlsx.full.min.js</b>.
+  <h1>LVtoExcel (browser-only)</h1>
+  <div class="muted">Loads local <code>pdf.min.js</code>, <code>pdf.worker.min.js</code>, <code>xlsx.full.min.js</code> from the same folder.</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="file" type="file" accept="application/pdf" />
+      <button id="btnLoad">Load PDF</button>
+      <button id="btnExtract" disabled>Extract</button>
+      <button id="btnExport" disabled>Export XLSX</button>
     </div>
-
-    <label>Select PDF</label>
-    <input id="pdfFile" type="file" accept="application/pdf" />
-
-    <div class="btnrow">
-      <button id="loadBtn">Load PDF</button>
-      <button id="extractBtn">Extract LV</button>
+    <div style="margin-top:10px" class="muted">
+      Output columns: Seite | Pos | Menge | Menge Einheit | EP | GP | Beschreibung
     </div>
-
-    <div class="btnrow">
-      <button id="xlsxBtn">Export XLSX</button>
-      <button id="csvBtn">Export CSV</button>
-    </div>
-
-    <label>Log</label>
-    <pre id="log"></pre>
   </div>
 
-  <div class="viewer">
-    <canvas id="canvas"></canvas>
-    <div id="out"></div>
+  <div class="card">
+    <div style="font-weight:600;margin-bottom:6px">Log</div>
+    <textarea id="log" readonly></textarea>
   </div>
-</div>
 
-<script>
-// Set this manually when you publish a new version.
-const VERSION_TAG = "20251218_0930";
-const VERSION = `LVtoExcel v${VERSION_TAG}`;
+  <div class="card" style="max-height:420px;overflow:auto">
+    <div style="font-weight:600;margin-bottom:6px">Preview (first 50 rows)</div>
+    <table id="tbl"></table>
+  </div>
 
-let pdfDoc = null;
-let extractedRows = null;
+  <!-- Local libraries (no CDN) -->
+  <script src="./pdf.min.js"></script>
+  <script src="./xlsx.full.min.js"></script>
 
-const logEl = document.getElementById("log");
-function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+  <script>
+  "use strict";
 
-log(`Welcome! ${VERSION}`);
-log("Tip: Use Ctrl+F5 if you replaced index.html (browser cache).");
+  // Manual version tag (YYYYMMDD_HHMM)
+  const VERSION_TAG = "20251218_1200";
 
-document.getElementById("loadBtn").addEventListener("click", loadPdf);
-document.getElementById("extractBtn").addEventListener("click", extractLV);
-document.getElementById("csvBtn").addEventListener("click", exportCSV);
-document.getElementById("xlsxBtn").addEventListener("click", exportXLSX);
+  // pdf.js worker must be enabled
+  if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
+  }
 
-// PDF.js worker (required for stable operation on HTTPS)
-if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
-} else {
-  log("ERROR: pdf.min.js not loaded (pdfjsLib missing).");
-}
+  const elFile = document.getElementById("file");
+  const elLoad = document.getElementById("btnLoad");
+  const elExtract = document.getElementById("btnExtract");
+  const elExport = document.getElementById("btnExport");
+  const elLog = document.getElementById("log");
+  const elTbl = document.getElementById("tbl");
 
-async function loadPdf(){
-  try{
-    log("loadPdf() ...");
-    if(!window.pdfjsLib) throw new Error("pdf.min.js not loaded (pdfjsLib missing).");
-    const f = document.getElementById("pdfFile").files[0];
-    if(!f) { alert("Please select a PDF first."); return; }
-    const buf = await f.arrayBuffer();
-    log("PDF size: " + (buf.byteLength/1024/1024).toFixed(2) + " MB");
+  let pdfDoc = null;
+  let extractedRows = [];
 
-    const loadingTask = pdfjsLib.getDocument({
-      data: buf,
-      disableFontFace: true,
-      useSystemFonts: true,
-      isEvalSupported: false,
-      stopAtErrors: false,
-    });
+  function log(msg){
+    elLog.value += msg + "\n";
+    elLog.scrollTop = elLog.scrollHeight;
+  }
 
-    loadingTask.onProgress = (p)=>{
-      try{
-        if(p && p.total){
-          const pct = Math.round((p.loaded/p.total)*100);
-          log("Loading: " + pct + "%");
-        }
-      }catch(e){}
+  function normText(s){
+    if (s == null) return "";
+    return String(s)
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function parseNumberDE(s){
+    s = normText(s);
+    if(!s) return null;
+    s = s.replace(/[^0-9,.\-]/g, "");
+    if(!s) return null;
+
+    // If comma is present, treat it as decimal separator and dots as thousands
+    if (s.indexOf(",") >= 0) s = s.replace(/\./g, "").replace(",", ".");
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // Turn pdf.js text items into lines by grouping close y coordinates.
+  function itemsToLines(items){
+    const pts = items
+      .map(it => ({
+        x: it.transform[4],
+        y: it.transform[5],
+        s: normText(it.str),
+        w: (typeof it.width === "number" ? it.width : 0),
+      }))
+      .filter(p => p.s);
+
+    // Group by y with tolerance
+    pts.sort((a,b) => b.y - a.y);
+
+    const lines = [];
+    const yTol = 2.2;
+
+    for(const p of pts){
+      let line = null;
+      for(const l of lines){
+        if (Math.abs(l.y - p.y) <= yTol) { line = l; break; }
+      }
+      if(!line){
+        line = { y: p.y, parts: [] };
+        lines.push(line);
+      }
+      line.parts.push({ x: p.x, s: p.s, w: p.w });
+    }
+
+    for(const l of lines){
+      l.parts.sort((a,b)=>a.x-b.x);
+      l.text = l.parts.map(pp=>pp.s).join(" ").trim();
+    }
+
+    return lines;
+  }
+
+  // Identify dotted numeric codes
+  function isDottedNumeric(s){
+    s = normText(s);
+    if(!s) return false;
+    return /^\d[\d\.]*\d$/.test(s) && s.indexOf(".") !== -1;
+  }
+
+  // "pos": dotted numeric code ending with 4 digits (hard rule)
+  // "title": dotted numeric code NOT ending with 4 digits
+  function classifyNrStrict(s){
+    s = normText(s);
+    if(!isDottedNumeric(s)) return null;
+    const parts = s.split(".");
+    const last = parts[parts.length - 1];
+    if (/^\d{4}$/.test(last)) return "pos";
+    return "title";
+  }
+
+  // Optional override: some LVs use dotted codes not ending with 4 digits for positions.
+  // We keep the hard "title" rule unless the line clearly has quantity or prices.
+  function classifyNrWithOverride(nrTxt, qtyTxt, unitTxt, epTxt, gpTxt){
+    const base = classifyNrStrict(nrTxt);
+    if (base === "title") {
+      const hasQty = parseNumberDE(qtyTxt) !== null;
+      const hasPrice = parseNumberDE(epTxt) !== null || parseNumberDE(gpTxt) !== null;
+      if (hasQty || hasPrice) return "pos";
+    }
+    return base;
+  }
+
+  // Noise lines detection
+  function isNoiseLine(t){
+    t = normText(t);
+    if(!t) return true;
+    const low = t.toLowerCase();
+    if (/^seite\s+\d+(\s+von\s+\d+)?$/.test(low)) return true;
+    if (low.includes("seite") && low.includes("von")) return true;
+    if (low.includes("fortsetzung")) return true;
+    if (low.includes("übertrag") || low.includes("uebertrag")) return true;
+    if (low.startsWith("datum") && low.includes(":")) return true;
+    if (low.startsWith("projekt") && low.includes(":")) return true;
+    return false;
+  }
+
+  // A conservative "qty-only" check (prevents stealing description numbers like 20cm)
+  function looksLikeQtyOnly(t){
+    t = normText(t);
+    if(!t) return false;
+    // Allow: "10", "10,5", "1.234,56", optionally followed by a short unit token
+    return /^(\d{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?)(\s+[A-Za-zÄÖÜäöüß]{1,10})?$/.test(t);
+  }
+
+  // Column cuts: keep defaults, then auto-shrink the Nr column if position codes are far left.
+  // Also expose separate buckets for description / qty / unit / ep / gp.
+  function getCuts(pageWidth, lines){
+    const defaults = {
+      nrMax:   pageWidth * 0.26,
+      descMax: pageWidth * 0.70,
+      qtyMax:  pageWidth * 0.78,
+      unitMax: pageWidth * 0.84,
+      epMax:   pageWidth * 0.92,
     };
 
-    pdfDoc = await loadingTask.promise;
-    log("PDF loaded. Pages: " + pdfDoc.numPages);
+    try{
+      if(!lines || !lines.length) return defaults;
 
-    await renderPage(1);
-    log("Rendered page 1.");
-  }catch(e){
-    log("ERROR: " + (e && e.message ? e.message : e));
-    alert("Error: " + (e && e.message ? e.message : e));
-  }
-}
-
-async function renderPage(pno){
-  const page = await pdfDoc.getPage(pno);
-  const vp = page.getViewport({ scale: 1.5 });
-  const canvas = document.getElementById("canvas");
-  canvas.width = Math.floor(vp.width);
-  canvas.height = Math.floor(vp.height);
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
-}
-
-function normText(s){
-  return (s||"").replace(/\s+/g," ").trim();
-}
-
-function parseNumberDE(s){
-  s = normText(s);
-  if(!s) return null;
-  s = s.replace(/[^0-9,\.\-]/g,"");
-  if(!s) return null;
-  if(s.indexOf(",") >= 0){
-    s = s.replace(/\./g,"").replace(",", ".");
-  }
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-function itemsToLines(items){
-  const pts = items
-    .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str), w: (typeof it.width === 'number' ? it.width : 0) }))
-    .filter(p => p.s);
-
-  pts.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
-
-  const lines = [];
-  const yTol = 2.2;
-  for(const p of pts){
-    let line = lines.find(l => Math.abs(l.y - p.y) <= yTol);
-    if(!line){
-      line = { y: p.y, parts: [] };
-      lines.push(line);
-    }
-    line.parts.push({x:p.x, s:p.s, w:p.w});
-  }
-
-  for(const l of lines){
-    l.parts.sort((a,b)=>a.x-b.x);
-    l.text = l.parts.map(pp=>pp.s).join(" ").trim();
-  }
-
-  lines.sort((a,b)=>b.y-a.y);
-  return lines;
-}
-
-// Column cuts. We start with safe defaults and then auto-shrink the Nr column
-// if the detected position numbers are far left (common when there is a left label column in the description).
-function getCuts(pageWidth, lines){
-  const defaults = {
-    nrMax: pageWidth * 0.26,
-    qtyMax: pageWidth * 0.72,
-    epMax: pageWidth * 0.87,
-  };
-
-  try{
-    if(!lines || !lines.length) return defaults;
-
-    // Collect right-edges of detected Nr tokens (x + width).
-    const ends = [];
-    const maxScan = Math.min(lines.length, 250);
-    for(let i=0;i<maxScan;i++){
-      const l = lines[i];
-      for(const part of (l.parts || [])){
-        const k = classifyNr(part.s);
-        if(k === "pos" || k === "title"){
-          const endX = (part.x || 0) + (part.w || 0);
-          if(endX > 0 && endX < pageWidth) ends.push(endX);
+      const ends = [];
+      const maxScan = Math.min(lines.length, 250);
+      for(let i=0;i<maxScan;i++){
+        const l = lines[i];
+        for(const part of (l.parts || [])){
+          const k = classifyNrStrict(part.s);
+          if(k === "pos" || k === "title"){
+            const endX = (part.x || 0) + (part.w || 0);
+            if(endX > 0 && endX < pageWidth) ends.push(endX);
+          }
         }
       }
+
+      if(ends.length >= 3){
+        ends.sort((a,b)=>a-b);
+        const p90 = ends[Math.floor(ends.length * 0.90)];
+        const margin = pageWidth * 0.02;
+
+        let nrMax = Math.min(defaults.nrMax, p90 + margin);
+        nrMax = Math.max(nrMax, pageWidth * 0.10);
+
+        // Keep space for description: never allow nrMax to invade description too much
+        nrMax = Math.min(nrMax, defaults.descMax - pageWidth * 0.10);
+
+        return { ...defaults, nrMax };
+      }
+    }catch(e){
+      // fall back
     }
-
-    if(ends.length >= 3){
-      ends.sort((a,b)=>a-b);
-      const p90 = ends[Math.floor(ends.length * 0.90)];
-      const margin = pageWidth * 0.02;
-
-      // Shrink nrMax but never grow it (keeps old behaviour as fallback).
-      let nrMax = Math.min(defaults.nrMax, p90 + margin);
-
-      // Keep some minimum so we don't accidentally eat the description.
-      nrMax = Math.max(nrMax, pageWidth * 0.12);
-
-      // Ensure there is still enough room for Qty column.
-      nrMax = Math.min(nrMax, defaults.qtyMax - pageWidth * 0.15);
-
-      return { ...defaults, nrMax };
-    }
-  }catch(e){
-    // fall back to defaults
+    return defaults;
   }
 
-  return defaults;
-}
-
-
-// "pos": ends with 4 digits, e.g. 1.012.01.0010
-// "title": any dotted numeric string not ending with 4 digits
-function classifyNr(s){
-  s = normText(s);
-  if(!s) return null;
-  if(!/^\d[\d\.]*\d$/.test(s)) return null;
-  if(s.indexOf(".") === -1) return null;
-
-  const parts = s.split(".");
-  const last = parts[parts.length-1];
-  if(/^\d{4}$/.test(last)) return "pos";
-  return "title";
-}
-
-// Footer/noise detection (not shown to user)
-function isNoiseLine(t){
-  t = normText(t||"");
-  if(!t) return true;
-  const NOISE = [
-    /Fortsetzung/i,
-    /nächster\s+Seite/i,
-    /\bÜbertrag\b/i,
-    /Seite\s+\d+\s+von\s+\d+/i
-  ];
-  return NOISE.some(rx => rx.test(t));
-}
-
-function escapeHtml(s){
-  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-}
-
-// Try to pull "quantity + unit" from a text chunk (German number formats)
-function extractQtyUnit(text){
-  const t = normText(text);
-  if(!t) return { qty:null, unit:null, cleaned:t };
-
-  const rx = /(\d{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?)\s*([A-Za-zÄÖÜäöüß]{1,10})\b/g;
-  let m, last = null;
-  while((m = rx.exec(t)) !== null){
-    const unit = m[2];
-    if(/^EP$/i.test(unit) || /^GP$/i.test(unit)) continue;
-    last = { qtyStr: m[1], unit: unit, idx: m.index, len: m[0].length };
+  function splitLineByCuts(line, cuts){
+    let nr = "", desc = "", qty = "", unit = "", ep = "", gp = "";
+    for(const part of line.parts){
+      if(part.x <= cuts.nrMax) nr += (nr?" ":"") + part.s;
+      else if(part.x <= cuts.descMax) desc += (desc?" ":"") + part.s;
+      else if(part.x <= cuts.qtyMax) qty += (qty?" ":"") + part.s;
+      else if(part.x <= cuts.unitMax) unit += (unit?" ":"") + part.s;
+      else if(part.x <= cuts.epMax) ep += (ep?" ":"") + part.s;
+      else gp += (gp?" ":"") + part.s;
+    }
+    return {
+      nr: normText(nr),
+      desc: normText(desc),
+      qty: normText(qty),
+      unit: normText(unit),
+      ep: normText(ep),
+      gp: normText(gp),
+    };
   }
-  if(!last) return { qty:null, unit:null, cleaned:t };
 
-  const qty = parseNumberDE(last.qtyStr);
-  const unit = last.unit;
-  const cleaned = normText((t.slice(0,last.idx) + " " + t.slice(last.idx + last.len)).trim());
-  return { qty, unit, cleaned };
-}
+  function renderPreview(rows){
+    const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
+    const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
+    const show = rows.slice(0,50);
 
-function looksLikeQtyOnly(t){
-  const s = normText(t||"");
-  if(!s) return false;
-  // Avoid labeled lines like "Wanddicke: 11,5 cm"
-  if(/:/.test(s)) return false;
-  // pure number or "number + unit"
-  return /^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?\s*(?:[A-Za-zÄÖÜäöüß]{1,10})?$/.test(s);
-}
+    let html = "<thead><tr>" + header.map(h=>"<th>"+h+"</th>").join("") + "</tr></thead><tbody>";
+    for(const r of show){
+      html += "<tr>" + cols.map(k=>{
+        const v = (r[k] == null ? "" : String(r[k]));
+        const safe = v.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+        return "<td>"+safe+"</td>";
+      }).join("") + "</tr>";
+    }
+    html += "</tbody>";
+    elTbl.innerHTML = html;
+  }
 
-function isPricePlaceholderLine(t){
-  const s = normText(t||"");
-  if(!s) return false;
-  // Typical LV footer line inside the row area: "m EP .... GP ...."
-  const hasEP = /\bEP\b/i.test(s);
-  const hasGP = /\bGP\b/i.test(s);
-  if(!hasEP) return false;
-  const junkOnly = /^[A-Za-zÄÖÜäöüß0-9\s\.,:\-]*$/.test(s) && /[\.]{3,}|_{3,}|-{3,}/.test(s);
-  return (hasEP && (hasGP || junkOnly)) && s.length <= 120;
-}
+  async function loadPdf(){
+    const f = elFile.files && elFile.files[0];
+    if(!f){ alert("Select a PDF file first."); return; }
+    if(!window.pdfjsLib){ alert("pdf.min.js not loaded (pdfjsLib missing)."); return; }
 
+    const buf = await f.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({data: buf}).promise;
 
-async function extractLV(){
-  try{
+    log("LVtoExcel loaded. VERSION_TAG=" + VERSION_TAG);
+    log("PDF loaded. Pages: " + pdfDoc.numPages);
+    extractedRows = [];
+    renderPreview([]);
+    elExtract.disabled = false;
+    elExport.disabled = true;
+  }
+
+  async function extractLV(){
     if(!pdfDoc){ alert("Load a PDF first."); return; }
-    log("extractLV() ...");
+    log("Extract started...");
 
     const out = [];
-    let current = null; // keep across pages (for continued items)
+    let current = null; // keep across pages until a new position begins
 
     function flush(){
-      if(current){
-        current.Beschreibung = (current.BeschreibungLines || []).join("\n").trim();
-        delete current.BeschreibungLines;
-        out.push(current);
-        current = null;
-      }
+      if(!current) return;
+      current.Beschreibung = (current.BeschreibungLines || []).join("\n").trim();
+      delete current.BeschreibungLines;
+      out.push(current);
+      current = null;
     }
 
-    for(let p=1;p<=pdfDoc.numPages;p++){
+    for(let p=1; p<=pdfDoc.numPages; p++){
       const page = await pdfDoc.getPage(p);
-      const vp = page.getViewport({ scale: 1.0 });
-      const width = vp.width;
+      const viewport = page.getViewport({scale: 1.0});
+      const pageWidth = viewport.width;
 
-      const tc = await page.getTextContent();
-      const lines = itemsToLines(tc.items);
+      const content = await page.getTextContent({normalizeWhitespace: false, disableCombineTextItems: false});
+      const lines = itemsToLines(content.items);
 
-      // Detect LV pages by presence of position numbers (even if header is missing on continuation pages)
-      const joined = lines.slice(0,80).map(l=>l.text).join(" | ");
-      const hasPosPattern = /\d+(?:\.\d+)+\.\d{4}\b/.test(joined);
-      const hasTableHeader = /\bNr\.?\b/i.test(joined) && /Menge\/Einheit/i.test(joined);
-      if(!hasPosPattern && !hasTableHeader) continue;
+      const cuts = getCuts(pageWidth, lines);
 
-      const cuts = getCuts(width, lines);
+      for(const line of lines){
+        const raw = normText(line.text);
+        if(!raw) continue;
+        if(isNoiseLine(raw)) continue;
 
-      for(const l of lines){
-        if(isNoiseLine(l.text)) continue;
+        const parts = splitLineByCuts(line, cuts);
 
-        let nrTxt = "";
-        let qtyTxt = "";
-        let epTxt = "";
-        let gpTxt = "";
+        // Determine if this line starts a new position/title
+        const kind = classifyNrWithOverride(parts.nr, parts.qty, parts.unit, parts.ep, parts.gp);
 
-        for(const part of l.parts){
-          if(part.x <= cuts.nrMax) nrTxt += (nrTxt?" ":"") + part.s;
-          else if(part.x <= cuts.qtyMax) qtyTxt += (qtyTxt?" ":"") + part.s;
-          else if(part.x <= cuts.epMax) epTxt += (epTxt?" ":"") + part.s;
-          else gpTxt += (gpTxt?" ":"") + part.s;
-        }
-
-        nrTxt = normText(nrTxt);
-        qtyTxt = normText(qtyTxt);
-        epTxt = normText(epTxt);
-        gpTxt = normText(gpTxt);
-
-        const headerish = /\bNr\b/i.test(nrTxt) || /Menge\/Einheit/i.test(qtyTxt) || /^EP$/i.test(epTxt) || /^GP$/i.test(gpTxt);
-        if(headerish) continue;
-
-        const kind = classifyNr(nrTxt);
-
-        // Title line
         if(kind === "title"){
+          // Title row: only Pos and Beschreibung
           flush();
-          let after = normText(l.text.replace(nrTxt, ""));
-          if(after && !isNoiseLine(after)){
-            out.push({
-              Seite: p,
-              Pos: nrTxt,
-              Menge: "",
-              MengeEinheit: "",
-              EP: "",
-              GP: "",
-              Beschreibung: after
-            });
-          }
+          const titleDesc = normText([parts.desc, parts.qty, parts.unit, parts.ep, parts.gp].filter(Boolean).join(" "));
+          out.push({
+            Seite: "",
+            Pos: parts.nr,
+            Menge: "",
+            MengeEinheit: "",
+            EP: "",
+            GP: "",
+            Beschreibung: titleDesc
+          });
           continue;
         }
 
-        // New position line
         if(kind === "pos"){
+          // New position row
           flush();
-
           current = {
-            Seite: p,
-            Pos: nrTxt,
+            Seite: String(p),
+            Pos: parts.nr,
             Menge: "",
             MengeEinheit: "",
             EP: "",
@@ -382,125 +347,107 @@ async function extractLV(){
             BeschreibungLines: []
           };
 
-          const ep = parseNumberDE(epTxt);
-          const gp = parseNumberDE(gpTxt);
+          // Description: keep line breaks by pushing per line
+          if(parts.desc && !isNoiseLine(parts.desc)) current.BeschreibungLines.push(parts.desc);
+
+          // Qty + unit (strict buckets)
+          const q = parseNumberDE(parts.qty);
+          if(q !== null) current.Menge = q;
+          if(parts.unit) current.MengeEinheit = parts.unit;
+
+          // Prices
+          const ep = parseNumberDE(parts.ep);
+          const gp = parseNumberDE(parts.gp);
           if(ep !== null) current.EP = ep;
           if(gp !== null) current.GP = gp;
-
-          const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
-          let midText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(midText && !isNoiseLine(midText)){
-            if(qtyTxt){
-              const q = extractQtyUnit(qtyTxt);
-              if(q.qty !== null) current.Menge = q.qty;
-              if(q.unit) current.MengeEinheit = q.unit;
-            }else{
-              // Only treat midText as qty/unit if the whole line looks like qty-only.
-              if(looksLikeQtyOnly(midText)){
-                const q = extractQtyUnit(midText);
-                if(q.qty !== null) current.Menge = q.qty;
-                if(q.unit) current.MengeEinheit = q.unit;
-              }
-            }
-if(midText){
-              current.BeschreibungLines.push(midText);
-            }
-          }
 
           continue;
         }
 
-        // Continuation line
+        // Continuation line for the current position
         if(current){
-          if(current.EP === "" || current.EP === null){
-            const ep = parseNumberDE(epTxt);
+          // Update missing qty/unit if the line looks like it carries qty info
+          if((current.Menge === "" || current.Menge === null) && parts.qty){
+            if(looksLikeQtyOnly(parts.qty)){
+              const q = parseNumberDE(parts.qty);
+              if(q !== null) current.Menge = q;
+            }
+          }
+          if((!current.MengeEinheit) && parts.unit){
+            // Unit is typically a short token; accept if it is not noise
+            if(/^[A-Za-zÄÖÜäöüß]{1,10}$/.test(parts.unit)) current.MengeEinheit = parts.unit;
+          }
+
+          // Update missing prices if found
+          if((current.EP === "" || current.EP === null) && parts.ep){
+            const ep = parseNumberDE(parts.ep);
             if(ep !== null) current.EP = ep;
           }
-          if(current.GP === "" || current.GP === null){
-            const gp = parseNumberDE(gpTxt);
+          if((current.GP === "" || current.GP === null) && parts.gp){
+            const gp = parseNumberDE(parts.gp);
             if(gp !== null) current.GP = gp;
           }
 
-          if((current.Menge === "" || current.Menge === null) || !current.MengeEinheit){
-            if(qtyTxt && looksLikeQtyOnly(qtyTxt)){
-              const q = extractQtyUnit(qtyTxt);
-              if(q.qty !== null && (current.Menge === "" || current.Menge === null)) current.Menge = q.qty;
-              if(q.unit && !current.MengeEinheit) current.MengeEinheit = q.unit;
-            }
-          }
-const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
-          let midText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(midText && !isNoiseLine(midText) && !isPricePlaceholderLine(midText)){
-            current.BeschreibungLines.push(midText);
-          }
-}
+          // Append description lines (do not strip numbers like 20cm)
+          if(parts.desc && !isNoiseLine(parts.desc)) current.BeschreibungLines.push(parts.desc);
+
+          // Some PDFs put left label column into "qty" bucket; only append if it is clearly not qty-only.
+          if(parts.qty && !looksLikeQtyOnly(parts.qty) && !isNoiseLine(parts.qty)) current.BeschreibungLines.push(parts.qty);
+          if(parts.unit && !/^[A-Za-zÄÖÜäöüß]{1,10}$/.test(parts.unit) && !isNoiseLine(parts.unit)) current.BeschreibungLines.push(parts.unit);
+
+          continue;
+        }
       }
     }
 
     flush();
     extractedRows = out;
 
-    log("Done. Rows: " + out.length);
+    log("Extract done. Rows: " + extractedRows.length);
+    renderPreview(extractedRows);
 
-    let html = "<table border='1' style='border-collapse:collapse;font-size:12px'>";
-    html += "<tr><th>Seite</th><th>Pos</th><th>Menge</th><th>Menge Einheit</th><th>EP</th><th>GP</th><th>Beschreibung</th></tr>";
-    out.slice(0,50).forEach(r=>{
-      html += "<tr>" +
-        "<td>"+(r.Seite ?? "")+"</td>"+
-        "<td>"+escapeHtml(r.Pos ?? "")+"</td>"+
-        "<td>"+(r.Menge ?? "")+"</td>"+
-        "<td>"+escapeHtml(r.MengeEinheit ?? "")+"</td>"+
-        "<td>"+(r.EP ?? "")+"</td>"+
-        "<td>"+(r.GP ?? "")+"</td>"+
-        "<td style='white-space:pre-wrap'>"+escapeHtml((r.Beschreibung||"").slice(0,400))+"</td>"+
-      "</tr>";
-    });
-    html += "</table><div class='hint'>Showing first 50 rows. Use Export to download all.</div>";
-    document.getElementById("out").innerHTML = html;
-
-  }catch(e){
-    log("ERROR: " + (e && e.message ? e.message : e));
-    alert("Error: " + (e && e.message ? e.message : e));
+    elExport.disabled = extractedRows.length === 0;
   }
-}
 
-function exportCSV(){
-  if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
-  const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
-  const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
-  const esc = (v)=>(''+(v??'')).replace(/"/g,'""');
-  const csv = header.join(",") + "\n" + extractedRows.map(r =>
-    cols.map(c => `"${esc(r[c])}"`).join(",")
-  ).join("\n");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
-  a.download = `LVtoExcel_${VERSION_TAG}.csv`;
-  a.click();
-}
+  function exportXLSX(){
+    if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
+    if(!window.XLSX){ alert("xlsx.full.min.js not loaded (XLSX missing)."); return; }
 
-function exportXLSX(){
-  if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
-  if(!window.XLSX){ alert("xlsx.full.min.js not loaded (XLSX missing)."); return; }
+    const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
+    const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
+    const data = [header, ...extractedRows.map(r => cols.map(k => r[k] ?? ""))];
 
-  const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
-  const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
-  const data = [header, ...extractedRows.map(r => cols.map(k => r[k] ?? ""))];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws["!cols"] = [
+      { wch: 6 },
+      { wch: 18 },
+      { wch: 10 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 70 },
+    ];
 
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [
-    { wch: 6 },
-    { wch: 18 },
-    { wch: 10 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 80 },
-  ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "LV");
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "LV");
-  XLSX.writeFile(wb, `LVtoExcel_${VERSION_TAG}.xlsx`);
-}
-</script>
+    const out = XLSX.write(wb, { bookType:"xlsx", type:"array" });
+    const blob = new Blob([out], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "LVtoExcel.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  elLoad.addEventListener("click", () => loadPdf().catch(e => { console.error(e); alert(String(e)); }));
+  elExtract.addEventListener("click", () => extractLV().catch(e => { console.error(e); alert(String(e)); }));
+  elExport.addEventListener("click", exportXLSX);
+
+  log("Ready. VERSION_TAG=" + VERSION_TAG);
+  </script>
 </body>
 </html>
