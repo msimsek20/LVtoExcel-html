@@ -57,7 +57,7 @@
 
 <script>
 // Set this manually when you publish a new version.
-const VERSION_TAG = "20251217_1500";
+const VERSION_TAG = "20251218_0930";
 const VERSION = `LVtoExcel v${VERSION_TAG}`;
 
 let pdfDoc = null;
@@ -145,7 +145,7 @@ function parseNumberDE(s){
 
 function itemsToLines(items){
   const pts = items
-    .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str) }))
+    .map(it => ({ x: it.transform[4], y: it.transform[5], s: normText(it.str), w: (typeof it.width === 'number' ? it.width : 0) }))
     .filter(p => p.s);
 
   pts.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
@@ -158,7 +158,7 @@ function itemsToLines(items){
       line = { y: p.y, parts: [] };
       lines.push(line);
     }
-    line.parts.push({x:p.x, s:p.s});
+    line.parts.push({x:p.x, s:p.s, w:p.w});
   }
 
   for(const l of lines){
@@ -170,14 +170,55 @@ function itemsToLines(items){
   return lines;
 }
 
-// Conservative cuts. Many LVs place Qty/Unit wider than expected.
-function getCuts(pageWidth){
-  return {
+// Column cuts. We start with safe defaults and then auto-shrink the Nr column
+// if the detected position numbers are far left (common when there is a left label column in the description).
+function getCuts(pageWidth, lines){
+  const defaults = {
     nrMax: pageWidth * 0.26,
     qtyMax: pageWidth * 0.72,
     epMax: pageWidth * 0.87,
   };
+
+  try{
+    if(!lines || !lines.length) return defaults;
+
+    // Collect right-edges of detected Nr tokens (x + width).
+    const ends = [];
+    const maxScan = Math.min(lines.length, 250);
+    for(let i=0;i<maxScan;i++){
+      const l = lines[i];
+      for(const part of (l.parts || [])){
+        const k = classifyNr(part.s);
+        if(k === "pos" || k === "title"){
+          const endX = (part.x || 0) + (part.w || 0);
+          if(endX > 0 && endX < pageWidth) ends.push(endX);
+        }
+      }
+    }
+
+    if(ends.length >= 3){
+      ends.sort((a,b)=>a-b);
+      const p90 = ends[Math.floor(ends.length * 0.90)];
+      const margin = pageWidth * 0.02;
+
+      // Shrink nrMax but never grow it (keeps old behaviour as fallback).
+      let nrMax = Math.min(defaults.nrMax, p90 + margin);
+
+      // Keep some minimum so we don't accidentally eat the description.
+      nrMax = Math.max(nrMax, pageWidth * 0.12);
+
+      // Ensure there is still enough room for Qty column.
+      nrMax = Math.min(nrMax, defaults.qtyMax - pageWidth * 0.15);
+
+      return { ...defaults, nrMax };
+    }
+  }catch(e){
+    // fall back to defaults
+  }
+
+  return defaults;
 }
+
 
 // "pos": ends with 4 digits, e.g. 1.012.01.0010
 // "title": any dotted numeric string not ending with 4 digits
@@ -230,6 +271,27 @@ function extractQtyUnit(text){
   return { qty, unit, cleaned };
 }
 
+function looksLikeQtyOnly(t){
+  const s = normText(t||"");
+  if(!s) return false;
+  // Avoid labeled lines like "Wanddicke: 11,5 cm"
+  if(/:/.test(s)) return false;
+  // pure number or "number + unit"
+  return /^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?\s*(?:[A-Za-zÄÖÜäöüß]{1,10})?$/.test(s);
+}
+
+function isPricePlaceholderLine(t){
+  const s = normText(t||"");
+  if(!s) return false;
+  // Typical LV footer line inside the row area: "m EP .... GP ...."
+  const hasEP = /\bEP\b/i.test(s);
+  const hasGP = /\bGP\b/i.test(s);
+  if(!hasEP) return false;
+  const junkOnly = /^[A-Za-zÄÖÜäöüß0-9\s\.,:\-]*$/.test(s) && /[\.]{3,}|_{3,}|-{3,}/.test(s);
+  return (hasEP && (hasGP || junkOnly)) && s.length <= 120;
+}
+
+
 async function extractLV(){
   try{
     if(!pdfDoc){ alert("Load a PDF first."); return; }
@@ -261,7 +323,7 @@ async function extractLV(){
       const hasTableHeader = /\bNr\.?\b/i.test(joined) && /Menge\/Einheit/i.test(joined);
       if(!hasPosPattern && !hasTableHeader) continue;
 
-      const cuts = getCuts(width);
+      const cuts = getCuts(width, lines);
 
       for(const l of lines){
         if(isNoiseLine(l.text)) continue;
@@ -332,19 +394,15 @@ async function extractLV(){
               const q = extractQtyUnit(qtyTxt);
               if(q.qty !== null) current.Menge = q.qty;
               if(q.unit) current.MengeEinheit = q.unit;
-
-              const q2 = extractQtyUnit(midText);
-              if(q2.qty !== null && current.Menge === "") current.Menge = q2.qty;
-              if(q2.unit && !current.MengeEinheit) current.MengeEinheit = q2.unit;
-              midText = q2.cleaned;
             }else{
-              const q = extractQtyUnit(midText);
-              if(q.qty !== null) current.Menge = q.qty;
-              if(q.unit) current.MengeEinheit = q.unit;
-              midText = q.cleaned;
+              // Only treat midText as qty/unit if the whole line looks like qty-only.
+              if(looksLikeQtyOnly(midText)){
+                const q = extractQtyUnit(midText);
+                if(q.qty !== null) current.Menge = q.qty;
+                if(q.unit) current.MengeEinheit = q.unit;
+              }
             }
-
-            if(midText){
+if(midText){
               current.BeschreibungLines.push(midText);
             }
           }
@@ -364,24 +422,18 @@ async function extractLV(){
           }
 
           if((current.Menge === "" || current.Menge === null) || !current.MengeEinheit){
-            if(qtyTxt){
+            if(qtyTxt && looksLikeQtyOnly(qtyTxt)){
               const q = extractQtyUnit(qtyTxt);
               if(q.qty !== null && (current.Menge === "" || current.Menge === null)) current.Menge = q.qty;
               if(q.unit && !current.MengeEinheit) current.MengeEinheit = q.unit;
             }
           }
-
-          const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
+const midParts = l.parts.filter(pt => pt.x > cuts.nrMax && pt.x <= cuts.epMax);
           let midText = normText(midParts.map(pt=>pt.s).join(" "));
-          if(midText && !isNoiseLine(midText)){
-            const q = extractQtyUnit(midText);
-            midText = q.cleaned;
-
-            if(midText){
-              current.BeschreibungLines.push(midText);
-            }
+          if(midText && !isNoiseLine(midText) && !isPricePlaceholderLine(midText)){
+            current.BeschreibungLines.push(midText);
           }
-        }
+}
       }
     }
 
