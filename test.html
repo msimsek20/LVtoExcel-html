@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LVtoExcel Pro - V3.0 (Multi-Mode)</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';</script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    :root { --primary: #0969da; --border:#d0d7de; --bg:#f6f8fa; --white:#ffffff; --danger:#cf222e; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 20px; color:#24292f; background:var(--bg); }
+    
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
+    .card { background: var(--white); border: 1px solid var(--border); border-radius: 6px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    
+    /* Controls */
+    h1 { font-size: 20px; margin: 0; color: var(--primary); }
+    .btn { background: #2da44e; color: white; border: 1px solid rgba(27,31,36,0.15); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; filter: grayscale(1); }
+    .btn-danger { background: var(--danger); }
+    .btn-secondary { background: #f6f8fa; color: #24292f; border-color: var(--border); }
+    
+    select, input[type="text"] { padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); }
+
+    /* Canvas & Guides */
+    #canvasWrapper { position: relative; overflow: auto; border: 1px solid #ccc; background: #555; display: inline-block; max-height: 80vh; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
+    canvas { display: block; }
+    .guide-layer { position: absolute; top: 0; left: 0; pointer-events: none; width: 100%; height: 100%; }
+    
+    /* Progress Bar */
+    #progressContainer { width: 100%; display: none; margin-top: 10px; }
+    progress { width: 100%; height: 20px; border-radius: 10px; }
+    
+    /* Table Preview */
+    #previewArea { overflow-x: auto; max-height: 400px; margin-top: 10px; border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; white-space: pre-wrap; }
+    th { background: #f0f0f0; position: sticky; top: 0; }
+    .numeric { text-align: right; }
+    
+    /* Cloud Option */
+    .cloud-option { font-size: 12px; color: #666; background: #eefbff; padding: 8px; border-radius: 5px; border: 1px solid #bdeeff; display: flex; align-items: center; gap: 8px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="card row" style="justify-content: space-between;">
+    <div class="row">
+      <h1>LVtoExcel <span style="font-size:12px; color:#666;">Pro V3.0</span></h1>
+      <input type="file" id="fileInput" accept="application/pdf" />
+    </div>
+    
+    <div class="row">
+      <label>Mod:</label>
+      <select id="modeSelect">
+        <option value="LV">İhale/LV Modu (Akıllı)</option>
+        <option value="GENERAL">Serbest Tablo (Manuel)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card" id="controlPanel">
+    <div class="row" style="margin-bottom: 10px;">
+      <button id="btnPrev" class="btn btn-secondary">Previous Page</button>
+      <span id="pageInfo">0 / 0</span>
+      <button id="btnNext" class="btn btn-secondary">Next Page</button>
+      
+      <div style="flex-grow:1"></div>
+      
+      <button id="btnClearGuides" class="btn btn-danger">Çizgileri Sıfırla</button>
+      <button id="btnExtract" class="btn" disabled>Veriyi Çek (Extract)</button>
+    </div>
+
+    <div class="sub" style="font-size: 12px; color: #666;">
+      <span id="guideHint">Kırmızı: Başlık/Altbilgi Kesimi | Mavi: Sütun Ayracı (Sürükle bırak)</span>
+      <span id="generalModeHint" style="display:none; color: var(--primary); font-weight:bold;"> :: Tıklayarak yeni sütun ekle, sağ tıklayarak sil.</span>
+    </div>
+
+    <div id="progressContainer">
+      <label id="progressLabel">İşleniyor...</label>
+      <progress id="progressBar" value="0" max="100"></progress>
+    </div>
+  </div>
+
+  <div style="text-align:center;">
+    <div id="canvasWrapper">
+      <canvas id="the-canvas"></canvas>
+      <canvas id="guide-canvas" class="guide-layer"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:10px;">
+      <h3>Önizleme</h3>
+      <div style="flex-grow:1"></div>
+      
+      <div class="cloud-option">
+        <input type="checkbox" id="chkCloud" checked>
+        <label for="chkCloud" title="Dosyayı Google Drive'ınıza veya Geliştirici Sunucusuna yedekler">
+           Hizmetin gelişimi için anonim veri paylaşımını ve yedeklemeyi onaylıyorum.
+        </label>
+      </div>
+      
+      <button id="btnExport" class="btn btn-primary" disabled>Excel İndir (.xlsx)</button>
+    </div>
+    <div id="previewArea"></div>
+  </div>
+</div>
+
+<script>
+  /*******************************************************
+   * CONFIG & STATE
+   *******************************************************/
+  // BURAYA APPS SCRIPT URL'NİZİ YAZIN (Deploy as Web App -> Execute as Me -> Access: Anyone)
+  const APPS_SCRIPT_URL = ""; 
+
+  let pdfDoc = null;
+  let pageNum = 1;
+  let pdfScale = 1.5;
+  let canvas, ctx, guideCanvas, gCtx;
+  let pageTextItems = []; // Aktif sayfanın metinleri
+  let extractedData = []; // Tüm çıkarılan veriler
+
+  // Guides State
+  let extractionMode = "LV"; // 'LV' or 'GENERAL'
+  
+  // LV Modu için Sabit Rehberler (0-1 arası normalize)
+  let guidesLV = {
+    header: 0.1, footer: 0.9,
+    cols: [0.10, 0.50, 0.65, 0.75, 0.85] // Pos, Desc, Unit, Qty, Price, Total
+  };
+  
+  // General Mod için Dinamik Rehberler
+  let guidesGeneral = {
+    header: 0.05, footer: 0.95,
+    cols: [0.2, 0.4, 0.6, 0.8] 
+  };
+
+  // Dragging State
+  let dragTarget = null; // 'header', 'footer', or index of col
+  let isDragging = false;
+
+  /*******************************************************
+   * INIT & EVENT LISTENERS
+   *******************************************************/
+  window.onload = () => {
+    canvas = document.getElementById('the-canvas');
+    ctx = canvas.getContext('2d');
+    guideCanvas = document.getElementById('guide-canvas');
+    gCtx = guideCanvas.getContext('2d');
+    
+    // Canvas Events
+    guideCanvas.addEventListener('mousedown', onMouseDown);
+    guideCanvas.addEventListener('mousemove', onMouseMove);
+    guideCanvas.addEventListener('mouseup', onMouseUp);
+    guideCanvas.addEventListener('contextmenu', onRightClick); // Silme için
+
+    document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+    document.getElementById('btnPrev').addEventListener('click', () => renderPage(pageNum - 1));
+    document.getElementById('btnNext').addEventListener('click', () => renderPage(pageNum + 1));
+    document.getElementById('modeSelect').addEventListener('change', changeMode);
+    document.getElementById('btnExtract').addEventListener('click', startExtraction);
+    document.getElementById('btnExport').addEventListener('click', exportToExcel);
+    document.getElementById('btnClearGuides').addEventListener('click', resetGuides);
+  };
+
+  /*******************************************************
+   * CORE: RENDER PDF & GUIDES
+   *******************************************************/
+  async function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const arrayBuffer = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
+    
+    document.getElementById('btnExtract').disabled = false;
+    renderPage(1);
+  }
+
+  async function renderPage(num) {
+    if (!pdfDoc || num < 1 || num > pdfDoc.numPages) return;
+    pageNum = num;
+    document.getElementById('pageInfo').textContent = `${pageNum} / ${pdfDoc.numPages}`;
+
+    const page = await pdfDoc.getPage(num);
+    const viewport = page.getViewport({ scale: pdfScale });
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    guideCanvas.width = viewport.width;
+    guideCanvas.height = viewport.height;
+
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    
+    // Metinleri al (Guide referansı için)
+    const textContent = await page.getTextContent();
+    pageTextItems = textContent.items.map(item => {
+      const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      return {
+        str: item.str,
+        x: tx[4],
+        y: tx[5], // PDF.js'de Y koordinatı aşağıdan yukarı olabilir, dikkat!
+        w: item.width * pdfScale, // Yaklaşık
+        h: item.height * pdfScale // Yaklaşık
+      };
+    });
+
+    drawGuides();
+  }
+
+  function getActiveGuides() {
+    return extractionMode === 'LV' ? guidesLV : guidesGeneral;
+  }
+
+  function drawGuides() {
+    gCtx.clearRect(0, 0, guideCanvas.width, guideCanvas.height);
+    const w = guideCanvas.width;
+    const h = guideCanvas.height;
+    const g = getActiveGuides();
+
+    // 1. Kırmızı Alanlar (Header/Footer - Ignore Areas)
+    gCtx.fillStyle = "rgba(255, 0, 0, 0.1)";
+    gCtx.fillRect(0, 0, w, g.header * h); // Üst
+    gCtx.fillRect(0, g.footer * h, w, h - (g.footer * h)); // Alt
+    
+    gCtx.strokeStyle = "red";
+    gCtx.lineWidth = 2;
+    // Header Line
+    gCtx.beginPath(); gCtx.moveTo(0, g.header * h); gCtx.lineTo(w, g.header * h); gCtx.stroke();
+    // Footer Line
+    gCtx.beginPath(); gCtx.moveTo(0, g.footer * h); gCtx.lineTo(w, g.footer * h); gCtx.stroke();
+
+    // 2. Mavi Sütunlar
+    gCtx.strokeStyle = "blue";
+    gCtx.setLineDash([5, 3]);
+    g.cols.forEach(xNorm => {
+      const x = xNorm * w;
+      gCtx.beginPath(); gCtx.moveTo(x, 0); gCtx.lineTo(x, h); gCtx.stroke();
+    });
+    gCtx.setLineDash([]);
+  }
+
+  /*******************************************************
+   * INTERACTION: DRAG & DROP & ADD/REMOVE
+   *******************************************************/
+  function changeMode() {
+    extractionMode = document.getElementById('modeSelect').value;
+    document.getElementById('guideHint').style.display = extractionMode === 'LV' ? 'inline' : 'none';
+    document.getElementById('generalModeHint').style.display = extractionMode === 'GENERAL' ? 'inline' : 'none';
+    drawGuides();
+  }
+
+  function resetGuides() {
+    if (extractionMode === 'GENERAL') guidesGeneral.cols = [0.2, 0.4, 0.6, 0.8];
+    else guidesLV.cols = [0.10, 0.50, 0.65, 0.75, 0.85];
+    drawGuides();
+  }
+
+  function onMouseDown(e) {
+    const rect = guideCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const w = guideCanvas.width;
+    const h = guideCanvas.height;
+    const g = getActiveGuides();
+
+    // Hit Test
+    // Header
+    if (Math.abs(y - g.header * h) < 10) { isDragging = true; dragTarget = 'header'; return; }
+    // Footer
+    if (Math.abs(y - g.footer * h) < 10) { isDragging = true; dragTarget = 'footer'; return; }
+    // Cols
+    for (let i = 0; i < g.cols.length; i++) {
+      if (Math.abs(x - g.cols[i] * w) < 10) {
+        isDragging = true; dragTarget = i;
+        return;
+      }
+    }
+
+    // General Mode: Click to ADD column
+    if (extractionMode === 'GENERAL' && !isDragging) {
+      g.cols.push(x / w);
+      g.cols.sort((a,b) => a-b);
+      drawGuides();
+    }
+  }
+
+  function onMouseMove(e) {
+    if (!isDragging) return;
+    const rect = guideCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const w = guideCanvas.width;
+    const h = guideCanvas.height;
+    const g = getActiveGuides();
+
+    if (dragTarget === 'header') g.header = Math.max(0, Math.min(y / h, g.footer - 0.05));
+    else if (dragTarget === 'footer') g.footer = Math.max(g.header + 0.05, Math.min(y / h, 1));
+    else if (typeof dragTarget === 'number') g.cols[dragTarget] = Math.max(0, Math.min(x / w, 1));
+
+    drawGuides();
+  }
+
+  function onMouseUp() { isDragging = false; dragTarget = null; }
+
+  function onRightClick(e) {
+    if (extractionMode !== 'GENERAL') return;
+    e.preventDefault();
+    const rect = guideCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const w = guideCanvas.width;
+    const g = getActiveGuides();
+
+    // Silmek için yakın olanı bul
+    const removeIdx = g.cols.findIndex(c => Math.abs((c*w) - x) < 10);
+    if (removeIdx !== -1) {
+      g.cols.splice(removeIdx, 1);
+      drawGuides();
+    }
+  }
+
+  /*******************************************************
+   * LOGIC: EXTRACTION (THE BRAIN)
+   *******************************************************/
+  async function startExtraction() {
+    if (!pdfDoc) return;
+    
+    extractedData = [];
+    const progressBar = document.getElementById('progressBar');
+    const progressContainer = document.getElementById('progressContainer');
+    const label = document.getElementById('progressLabel');
+    
+    progressContainer.style.display = 'block';
+    
+    const g = getActiveGuides(); // Normalize değerler
+
+    // Tüm sayfaları gez
+    for (let i = 1; i <= pdfDoc.numPages; i++) {
+      progressBar.value = (i / pdfDoc.numPages) * 100;
+      label.textContent = `Sayfa ${i} / ${pdfDoc.numPages} işleniyor...`;
+      
+      const page = await pdfDoc.getPage(i);
+      const viewport = page.getViewport({ scale: 1.0 }); // Coordinate için scale 1 yeterli
+      const textContent = await page.getTextContent();
+      
+      const width = viewport.width;
+      const height = viewport.height;
+      
+      // Filtrele: Header/Footer dışındakiler
+      const safeTop = height * (1 - g.header); // PDF coordinate origin bottom-left genellikle
+      const safeBottom = height * (1 - g.footer); 
+      // Not: PDF.js koordinat sistemi (0,0) sol-alt köşedir.
+      // Ekranda biz üstten (0) çizdik header'ı.
+      // PDF.js Y'si: 0 (alt) -> height (üst).
+      // Screen Y'si: 0 (üst) -> height (alt).
+      // Dönüşüm: pdfY = height - screenY
+      
+      const limitY_Top = height - (g.header * height);
+      const limitY_Bottom = height - (g.footer * height);
+
+      // Metinleri hazırla
+      let items = textContent.items.map(item => {
+        return {
+          str: item.str,
+          x: item.transform[4], // pdf x
+          y: item.transform[5], // pdf y (bottom-up)
+          w: item.width
+        };
+      }).filter(item => item.y < limitY_Top && item.y > limitY_Bottom);
+
+      // Yukarıdan aşağı sırala (PDF Y'si büyük olan üsttedir)
+      items.sort((a, b) => b.y - a.y);
+
+      if (extractionMode === 'LV') {
+        extractedData.push(...processLVPage(items, width, g.cols));
+      } else {
+        extractedData.push(...processGeneralPage(items, width, g.cols));
+      }
+    }
+    
+    label.textContent = "Tamamlandı!";
+    renderPreview(extractedData);
+    document.getElementById('btnExport').disabled = false;
+  }
+
+  /**
+   * LV MODE: Poz, Tanım, Miktar, Fiyat mantığı
+   */
+  function processLVPage(items, pgWidth, colsNorm) {
+    let rows = [];
+    let currentRow = null;
+    
+    // Sütun pixel sınırları
+    const limits = colsNorm.map(c => c * pgWidth);
+    // [PosLimit, DescLimit, UnitLimit, QtyLimit, PriceLimit]
+    // Varsayım: 
+    // Col 0: Pos (0 -> limits[0])
+    // Col 1: Desc (limits[0] -> limits[1])
+    // Col 2: Unit ...
+    
+    items.forEach(item => {
+      // Hangi sütunda?
+      let colIdx = 0;
+      for (let i=0; i<limits.length; i++) {
+        if (item.x > limits[i]) colIdx = i + 1;
+      }
+
+      // Yeni Poz Başlangıcı mı? (LV Modunda Kural: İlk sütunda veri varsa yeni satırdır)
+      if (colIdx === 0 && item.str.trim().length > 0) {
+        if (currentRow) rows.push(currentRow);
+        currentRow = { pos: item.str, desc: "", unit: "", qty: "", price: "", total: "" };
+      } else if (currentRow) {
+        // Mevcut satıra ekle
+        const val = item.str.trim();
+        if(!val) return;
+        
+        if (colIdx === 1) currentRow.desc += " " + val;
+        else if (colIdx === 2) currentRow.unit = val; // Genelde tek kelime
+        else if (colIdx === 3) currentRow.qty = val;
+        else if (colIdx === 4) currentRow.price = val;
+        else if (colIdx === 5) currentRow.total = val;
+      }
+    });
+    if (currentRow) rows.push(currentRow);
+    return rows;
+  }
+
+  /**
+   * GENERAL MODE: Her satır yeni satır, sütunlara böl
+   */
+  function processGeneralPage(items, pgWidth, colsNorm) {
+    let rows = [];
+    let currentRow = [];
+    let lastY = -1;
+    const limits = colsNorm.map(c => c * pgWidth);
+
+    items.forEach(item => {
+      // Satır Gruplama (Y mesafesi 10px'den fazlaysa yeni satır)
+      if (lastY === -1 || Math.abs(item.y - lastY) > 8) {
+        if (currentRow.length > 0) rows.push(currentRow); // Önceki satırı kaydet
+        // Yeni boş satır yarat (Sütun sayısı: guide sayısı + 1)
+        currentRow = new Array(limits.length + 1).fill("");
+        lastY = item.y;
+      }
+
+      // Sütun bul
+      let colIdx = 0;
+      for (let i=0; i<limits.length; i++) {
+        if (item.x > limits[i]) colIdx = i + 1;
+      }
+      
+      currentRow[colIdx] += (currentRow[colIdx] ? " " : "") + item.str;
+    });
+
+    if (currentRow.length > 0) rows.push(currentRow);
+    return rows;
+  }
+
+  /*******************************************************
+   * UTILS: FORMATTING & EXPORT
+   *******************************************************/
+  
+  // Gelişmiş Türkçe Sayı Temizleme
+  function cleanTurkishNumber(str) {
+    if (!str) return 0;
+    // Harfleri ve gereksiz karakterleri temizle, sadece sayı, virgül, nokta, eksi kalsın
+    let clean = str.replace(/[^0-9,.-]/g, '').trim();
+    
+    // 1.250,50 -> 1250.50
+    if (clean.includes(',') && clean.includes('.')) {
+      clean = clean.replace(/\./g, '').replace(',', '.');
+    } 
+    // 1234,50 -> 1234.50
+    else if (clean.includes(',')) {
+      clean = clean.replace(',', '.');
+    }
+    
+    let res = parseFloat(clean);
+    return isNaN(res) ? 0 : res;
+  }
+
+  function renderPreview(data) {
+    const div = document.getElementById('previewArea');
+    div.innerHTML = "";
+    const table = document.createElement('table');
+    
+    // Header
+    const trH = document.createElement('tr');
+    if (extractionMode === 'LV') {
+      ['Poz No', 'Açıklama', 'Birim', 'Miktar', 'B.Fiyat', 'Toplam'].forEach(h => {
+        const th = document.createElement('th'); th.textContent = h; trH.appendChild(th);
+      });
+    } else {
+      // General Mode Headers (Col 1, Col 2...)
+      const colCount = data[0] ? data[0].length : 0;
+      for(let i=0; i<colCount; i++) {
+        const th = document.createElement('th'); th.textContent = `Sütun ${i+1}`; trH.appendChild(th);
+      }
+    }
+    table.appendChild(trH);
+
+    // Body (Limit to first 50 rows for performance)
+    data.slice(0, 50).forEach(row => {
+      const tr = document.createElement('tr');
+      if (extractionMode === 'LV') {
+        [row.pos, row.desc, row.unit, row.qty, row.price, row.total].forEach(cell => {
+          const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td);
+        });
+      } else {
+        row.forEach(cell => {
+          const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td);
+        });
+      }
+      table.appendChild(tr);
+    });
+
+    if (data.length > 50) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      td.textContent = `... ve ${data.length - 50} satır daha ...`;
+      td.style.textAlign = 'center';
+      td.style.fontStyle = 'italic';
+      tr.appendChild(td);
+      table.appendChild(tr);
+    }
+
+    div.appendChild(table);
+  }
+
+  async function exportToExcel() {
+    // 1. Veriyi Hazırla
+    let ws_data = [];
+    
+    if (extractionMode === 'LV') {
+      ws_data.push(['Poz No', 'Tanım', 'Birim', 'Miktar', 'Birim Fiyat', 'Toplam Fiyat']);
+      extractedData.forEach(r => {
+        // Sayıları düzelt
+        const qty = cleanTurkishNumber(r.qty);
+        const prc = cleanTurkishNumber(r.price);
+        const tot = cleanTurkishNumber(r.total);
+        ws_data.push([r.pos, r.desc, r.unit, qty, prc, tot || (qty*prc)]);
+      });
+    } else {
+      extractedData.forEach(r => {
+        // General modda her şeyi string bırakıyoruz, ama sayıya benziyorsa çevirebiliriz
+        const cleanRow = r.map(c => {
+          // Basit bir sayı kontrolü
+          if (c.match(/^[0-9.,]+$/)) return cleanTurkishNumber(c);
+          return c;
+        });
+        ws_data.push(cleanRow);
+      });
+    }
+
+    // 2. Excel Oluştur
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    XLSX.utils.book_append_sheet(wb, ws, "Export");
+    
+    // 3. Blob Oluştur
+    const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    const blob = new Blob([wbout], {type:"application/octet-stream"});
+    
+    // 4. İndir
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "LV_Export_" + new Date().toISOString().slice(0,10) + ".xlsx";
+    a.click();
+
+    // 5. Cloud Backup (Opsiyonel)
+    if (document.getElementById('chkCloud').checked && APPS_SCRIPT_URL) {
+      uploadToCloud(blob, a.download);
+    } else if (document.getElementById('chkCloud').checked && !APPS_SCRIPT_URL) {
+      console.log("
