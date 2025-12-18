@@ -3,72 +3,88 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LVtoExcel Pro - V4.0 (Header & Types)</title>
+  <title>LVtoExcel Pro - V5.0 (Master Column Logic)</title>
   
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
   <style>
-    :root { --primary: #0969da; --border:#d0d7de; --bg:#f6f8fa; --white:#ffffff; --danger:#cf222e; }
+    :root { --primary: #0969da; --border:#d0d7de; --bg:#f6f8fa; --white:#ffffff; --danger:#cf222e; --success:#2da44e; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; color:#24292f; background:var(--bg); }
     
-    .container { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
+    .container { max-width: 1300px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
     .card { background: var(--white); border: 1px solid var(--border); border-radius: 6px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
     .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     
     h1 { font-size: 20px; margin: 0; color: var(--primary); }
-    .btn { background: #2da44e; color: white; border: 1px solid rgba(27,31,36,0.15); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
+    .btn { background: var(--success); color: white; border: 1px solid rgba(27,31,36,0.15); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
     .btn:disabled { background: #94d3a2; cursor: not-allowed; opacity: 0.6; }
     .btn-danger { background: var(--danger); }
     .btn-secondary { background: #f6f8fa; color: #24292f; border-color: var(--border); }
     select, input[type="file"], input[type="text"] { padding: 6px; border-radius: 4px; border: 1px solid var(--border); }
 
     /* Canvas Alanı */
-    #canvasWrapper { position: relative; display: inline-block; border: 1px solid #999; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: #555; margin-top: 40px; /* Header alanı için boşluk */ }
+    #canvasWrapper { position: relative; display: inline-block; border: 1px solid #999; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: #555; margin-top: 50px; }
     canvas { display: block; }
     .guide-layer { position: absolute; top: 0; left: 0; cursor: crosshair; z-index: 10; }
     
     /* Header Overlay (Inputs) */
     #headerOverlay {
         position: absolute;
-        top: -36px; /* Canvas'ın üstüne çıkar */
+        top: -45px; /* Daha fazla yer lazım */
         left: 0;
         width: 100%;
-        height: 36px;
-        pointer-events: none; /* Tıklamalar canvas'a geçsin diye, ama inputlar için auto yapacağız */
+        height: 45px;
+        pointer-events: none; 
         z-index: 20;
-        display: none; /* Sadece General Modda görünür */
+        display: none; 
     }
     .col-header-box {
         position: absolute;
         top: 0;
-        height: 32px;
-        background: rgba(255,255,255,0.9);
-        border: 1px solid #0969da;
-        border-radius: 4px;
+        height: 42px;
+        background: rgba(255,255,255,0.95);
+        border: 1px solid #999;
+        border-bottom: 2px solid #0969da;
+        border-radius: 4px 4px 0 0;
         display: flex;
-        align-items: center;
+        flex-direction: column;
+        justify-content: center;
         padding: 0 4px;
-        pointer-events: auto; /* Inputlara tıklanabilsin */
+        pointer-events: auto;
         box-sizing: border-box;
-        gap: 3px;
-        transition: left 0.2s, width 0.2s; /* Yumuşak geçiş */
+        transition: left 0.1s, width 0.1s, background 0.2s;
+        font-size: 11px;
     }
-    .col-header-box input { width: 100%; min-width: 30px; font-size: 12px; border:none; background: transparent; font-weight: bold; }
-    .col-header-box input:focus { outline: none; background: #eefbff; }
-    .col-header-box select { width: 40px; font-size: 11px; border: 1px solid #ccc; background: #eee; cursor: pointer; padding: 0; }
+    /* Ana Sütun Seçilince */
+    .col-header-box.master-col {
+        background: #e6ffec;
+        border-color: #2da44e;
+        border-bottom-width: 3px;
+    }
+    
+    .col-top-row { display: flex; width: 100%; gap: 2px; margin-bottom: 2px; }
+    .col-bot-row { display: flex; width: 100%; align-items: center; gap: 5px; }
+
+    .col-header-box input[type="text"] { width: 100%; font-size: 11px; border:none; background: transparent; font-weight: bold; border-bottom: 1px dotted #ccc; padding: 2px; }
+    .col-header-box select { width: 100%; font-size: 10px; border: 1px solid #ccc; background: #fff; padding: 0; height: 18px; }
+    
+    /* Radio Button Customization */
+    .master-selector { cursor: pointer; display: flex; align-items: center; gap: 3px; font-size: 10px; color: #555; white-space: nowrap; }
+    .master-selector input { margin: 0; cursor: pointer; }
 
     /* Progress & Preview */
     #progressContainer { width: 100%; display: none; margin-top: 10px; background: #eee; border-radius: 4px; overflow: hidden; }
-    #progressBar { width: 0%; height: 5px; background: #2da44e; transition: width 0.3s; }
+    #progressBar { width: 0%; height: 5px; background: var(--success); transition: width 0.3s; }
     #previewArea { overflow-x: auto; max-height: 400px; margin-top: 10px; border: 1px solid var(--border); background: #fff; }
     
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { border: 1px solid #ddd; padding: 6px; text-align: left; white-space: pre-wrap; vertical-align: top; }
-    th { background: #f0f0f0; position: sticky; top: 0; font-weight: bold; }
+    th { background: #f0f0f0; position: sticky; top: 0; font-weight: bold; z-index: 5; }
     
     .hint { font-size: 12px; color: #666; margin-top: 5px; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 10px; background: #eee; border: 1px solid #ccc; }
   </style>
 </head>
 <body>
@@ -76,14 +92,14 @@
 <div class="container">
   <div class="card row" style="justify-content: space-between;">
     <div class="row">
-      <h1>LVtoExcel <span style="font-size:12px; color:#666;">Pro V4.0</span></h1>
+      <h1>LVtoExcel <span style="font-size:12px; color:#666;">Pro V5.0 (Smart Row Grouping)</span></h1>
       <input type="file" id="fileInput" accept="application/pdf" />
     </div>
     <div class="row">
       <label>Mod:</label>
       <select id="modeSelect">
         <option value="LV">Otomatik LV Modu</option>
-        <option value="GENERAL">Manuel Tablo Modu (Editör)</option>
+        <option value="GENERAL" selected>Serbest Tablo Modu (Editör)</option>
       </select>
     </div>
   </div>
@@ -94,17 +110,20 @@
       <span id="pageInfo">0 / 0</span>
       <button id="btnNext" class="btn btn-secondary">Next</button>
       <div style="flex-grow:1"></div>
-      <button id="btnClearGuides" class="btn btn-danger">Sütunları Sıfırla</button>
-      <button id="btnExtract" class="btn" disabled>Veriyi Çek</button>
+      <button id="btnClearGuides" class="btn btn-danger">Çizgileri Sıfırla</button>
+      <button id="btnExtract" class="btn" disabled>Veriyi Çek (Extract)</button>
     </div>
+    
     <div class="hint">
-      <span id="guideHint">🔴 Kırmızı: Header/Footer Kes | 🔵 Mavi: Sütun Ayracı</span>
-      <span id="generalModeHint" style="display:none; color: var(--primary); font-weight:bold;"> :: Boşluğa tıkla: Sütun Ekle | Sağ tıkla: Sil | Kutucuklara Başlık Yaz</span>
+      <span id="guideHint" style="display:none">🔴 Kırmızı: Header/Footer Kes | 🔵 Mavi: Sütun Ayracı</span>
+      <span id="generalModeHint" style="color: var(--primary);">
+        <b>İpucu:</b> 1. Sütunları mavi çizgilerle ayır. 2. Hangi sütun "Satır Başı" (Ana Sütun) ise başlığındaki Radyo butonunu seç. 3. Veriyi Çek.
+      </span>
     </div>
     <div id="progressContainer"><div id="progressBar"></div></div>
   </div>
 
-  <div style="text-align:center; background:#333; padding:50px 20px 20px 20px; border-radius:8px; overflow:auto;">
+  <div style="text-align:center; background:#333; padding:60px 20px 20px 20px; border-radius:8px; overflow:auto;">
     <div id="canvasWrapper">
       <div id="headerOverlay"></div>
       
@@ -115,7 +134,7 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:10px;">
-      <h3>Önizleme</h3>
+      <h3>Sonuç Önizleme</h3>
       <div style="flex-grow:1"></div>
       <button id="btnExport" class="btn" style="background:#0969da;" disabled>Excel İndir (.xlsx)</button>
     </div>
@@ -127,18 +146,18 @@
   // STATE
   let pdfDoc = null;
   let pageNum = 1;
-  let pdfScale = 1.3;
+  let pdfScale = 1.4;
   let canvas, ctx, guideCanvas, gCtx;
   let extractedData = [];
   
   // Varsayılan Değerler
-  let extractionMode = "LV"; 
+  let extractionMode = "GENERAL"; // V5 için General modu default yapalım
   let guidesLV = { header: 0.1, footer: 0.9, cols: [0.10, 0.50, 0.65, 0.75, 0.85] };
-  let guidesGeneral = { header: 0.05, footer: 0.95, cols: [0.2, 0.4, 0.6, 0.8] };
+  let guidesGeneral = { header: 0.05, footer: 0.95, cols: [0.15, 0.50, 0.70, 0.85] };
   
-  // Sütun Ayarları (General Mod İçin)
-  // Yapı: { index: 0, title: "Sütun 1", type: "text" }
+  // Sütun Ayarları & Ana Sütun
   let columnSettings = {}; 
+  let masterColumnIndex = 0; // Hangi sütun satır başlatıcı?
 
   let isDragging = false;
   let dragTarget = null;
@@ -162,6 +181,10 @@
     document.getElementById('btnExtract').addEventListener('click', startExtraction);
     document.getElementById('btnExport').addEventListener('click', exportToExcel);
     document.getElementById('btnClearGuides').addEventListener('click', resetGuides);
+    
+    // Default mod ayarı UI senkronizasyonu
+    document.getElementById('modeSelect').value = extractionMode;
+    changeMode();
   });
 
   async function handleFileSelect(e) {
@@ -185,9 +208,7 @@
     
     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
     
-    // Header Overlay genişliğini de ayarla
     document.getElementById('headerOverlay').style.width = viewport.width + "px";
-    
     drawGuides();
   }
 
@@ -202,11 +223,11 @@
     const g = getActiveGuides();
 
     // Red Areas
-    gCtx.fillStyle = "rgba(207, 34, 46, 0.15)";
+    gCtx.fillStyle = "rgba(207, 34, 46, 0.10)";
     gCtx.fillRect(0, 0, w, g.header * h);
     gCtx.fillRect(0, g.footer * h, w, h - (g.footer * h));
     
-    gCtx.strokeStyle = "#cf222e"; gCtx.lineWidth = 2;
+    gCtx.strokeStyle = "#cf222e"; gCtx.lineWidth = 1;
     gCtx.beginPath(); gCtx.moveTo(0, g.header * h); gCtx.lineTo(w, g.header * h); gCtx.stroke();
     gCtx.beginPath(); gCtx.moveTo(0, g.footer * h); gCtx.lineTo(w, g.footer * h); gCtx.stroke();
 
@@ -219,11 +240,10 @@
     });
     gCtx.setLineDash([]);
     
-    // Input Kutularını Güncelle (Sadece Mouse Bırakılınca veya Mod değişince tam render iyidir)
     if (!isDragging) updateHeaderOverlay();
   }
 
-  // Dinamik Input Kutularını Oluştur (V4.0 Özelliği)
+  // --- V5.0 ÖZELLİĞİ: Gelişmiş Header & Master Column Selector ---
   function updateHeaderOverlay() {
     const overlay = document.getElementById('headerOverlay');
     
@@ -233,13 +253,9 @@
     }
     overlay.style.display = 'block';
     
-    // Mevcut ayarları koru, DOM'u sıfırdan yap
-    // Sütun aralıklarını bul: [0, ...cols, 1]
     const g = getActiveGuides();
     const boundaries = [0, ...g.cols, 1];
     
-    // DOM'u temizle ama önce inputlardaki değerleri kaydetsek iyi olurdu. 
-    // Basitlik için columnSettings objesini kullanacağız.
     overlay.innerHTML = "";
 
     for (let i = 0; i < boundaries.length - 1; i++) {
@@ -248,56 +264,75 @@
       const widthPct = (end - start) * 100;
       const leftPct = start * 100;
       
-      // Ayarları getir veya varsayılan yarat
+      // Ayarları getir
       if (!columnSettings[i]) columnSettings[i] = { title: `Sütun ${i+1}`, type: 'text' };
       
       const box = document.createElement('div');
       box.className = 'col-header-box';
+      if (masterColumnIndex === i) box.classList.add('master-col');
+      
       box.style.left = leftPct + "%";
       box.style.width = widthPct + "%";
       
-      // Input: Başlık
+      // İçerik: Input + Select + Master Radio
+      const topRow = document.createElement('div'); topRow.className='col-top-row';
+      const botRow = document.createElement('div'); botRow.className='col-bot-row';
+      
+      // Başlık Input
       const input = document.createElement('input');
       input.type = "text";
       input.value = columnSettings[i].title;
       input.oninput = (e) => columnSettings[i].title = e.target.value;
-      
-      // Select: Tip
+      input.placeholder = "Başlık";
+      topRow.appendChild(input);
+
+      // Veri Tipi Select
       const select = document.createElement('select');
-      const opts = [
-        {val:'text', txt:'T', title:'Metin'}, 
-        {val:'number', txt:'#', title:'Sayı'}, 
-        {val:'currency', txt:'$', title:'Para Birimi'}
-      ];
-      opts.forEach(o => {
-        const op = document.createElement('option');
-        op.value = o.val; op.text = o.txt; op.title = o.title;
-        if(columnSettings[i].type === o.val) op.selected = true;
+      [{v:'text',t:'T'}, {v:'number',t:'#'}, {v:'currency',t:'$'}].forEach(o=>{
+        const op=document.createElement('option'); op.value=o.v; op.text=o.t;
+        if(columnSettings[i].type===o.v) op.selected=true;
         select.appendChild(op);
       });
+      select.style.width = "30px";
       select.onchange = (e) => columnSettings[i].type = e.target.value;
+      topRow.appendChild(select);
+      
+      // Master Column Radio (Ana Sütun Seçici)
+      const radioLabel = document.createElement('label');
+      radioLabel.className = 'master-selector';
+      radioLabel.title = "Bu sütun doluysa yeni satır başlat";
+      
+      const radio = document.createElement('input');
+      radio.type = "radio";
+      radio.name = "masterColGroup";
+      radio.checked = (masterColumnIndex === i);
+      radio.onclick = () => { masterColumnIndex = i; updateHeaderOverlay(); };
+      
+      radioLabel.appendChild(radio);
+      radioLabel.appendChild(document.createTextNode(masterColumnIndex === i ? "Ana Sütun" : "Ana"));
+      
+      botRow.appendChild(radioLabel);
 
-      box.appendChild(input);
-      box.appendChild(select);
+      box.appendChild(topRow);
+      box.appendChild(botRow);
       overlay.appendChild(box);
     }
   }
 
   // --- INTERACTION ---
-
   function changeMode() {
     extractionMode = document.getElementById('modeSelect').value;
     document.getElementById('guideHint').style.display = extractionMode === 'LV' ? 'inline' : 'none';
     document.getElementById('generalModeHint').style.display = extractionMode === 'GENERAL' ? 'inline' : 'none';
-    // Mod değişince ayarları temizle veya koru? Temizleyelim kafa karışmasın
     columnSettings = {};
     drawGuides();
   }
   
   function resetGuides() {
-    if (extractionMode === 'GENERAL') guidesGeneral.cols = [0.2, 0.4, 0.6, 0.8];
+    if (extractionMode === 'GENERAL') guidesGeneral.cols = [0.15, 0.50, 0.70, 0.85];
     else guidesLV.cols = [0.10, 0.50, 0.65, 0.75, 0.85];
     columnSettings = {};
+    masterColumnIndex = 0;
     drawGuides();
   }
 
@@ -309,7 +344,6 @@
     const h = guideCanvas.height;
     const g = getActiveGuides();
 
-    // Hit test
     if (Math.abs(y - g.header * h) < 10) { isDragging=true; dragTarget='header'; return; }
     if (Math.abs(y - g.footer * h) < 10) { isDragging=true; dragTarget='footer'; return; }
     
@@ -322,8 +356,9 @@
     if (extractionMode === 'GENERAL' && !isDragging) {
       g.cols.push(x / w);
       g.cols.sort((a,b)=>a-b);
-      // Yeni sütun eklenince ayarları kaydır veya sıfırla (Basit çözüm: sıfırla, çünkü indexler kaydı)
-      columnSettings = {}; 
+      // Sütun eklenince ayarlar kaymasın diye basit reset veya akıllı mapping yapılabilir.
+      // Basitlik için resetlemiyoruz ama master index kayabilir. Kontrol edelim:
+      if (masterColumnIndex >= g.cols.length) masterColumnIndex = 0;
       drawGuides();
     }
   }
@@ -341,14 +376,14 @@
     else if (dragTarget==='footer') g.footer = Math.max(y/h, g.header + 0.05);
     else if (typeof dragTarget==='number') g.cols[dragTarget] = Math.max(0, Math.min(x/w, 1));
     
-    drawGuides(); // Sürüklerken sadece canvas çiz, DOM'u elleme (performans)
+    drawGuides();
   }
 
   function onMouseUp() {
     if (isDragging) {
       isDragging = false;
       dragTarget = null;
-      updateHeaderOverlay(); // Sürükleme bitince kutuları güncelle
+      updateHeaderOverlay();
     }
   }
 
@@ -363,12 +398,13 @@
     const idx = g.cols.findIndex(c => Math.abs(c*w - x) < 15);
     if (idx !== -1) {
       g.cols.splice(idx, 1);
-      columnSettings = {}; // Silinince ayarlar bozulmasın diye sıfırla
+      // Master sütun silindiyse 0'a çek
+      if (masterColumnIndex >= idx) masterColumnIndex = Math.max(0, masterColumnIndex - 1);
       drawGuides();
     }
   }
 
-  // --- ENGINE ---
+  // --- ENGINE (THE BRAIN) ---
 
   async function startExtraction() {
     if (!pdfDoc) return;
@@ -389,12 +425,14 @@
         return { str: item.str, x: vx, y: vy, w: item.width };
       });
 
-      // Y Filtresi
+      // Y Filtresi (Header/Footer)
       items = items.filter(it => it.y > g.header*h && it.y < g.footer*h);
+      
+      // Sıralama (Y'ye göre)
       items.sort((a,b) => Math.abs(a.y-b.y)<5 ? a.x-b.x : a.y-b.y);
 
       if (extractionMode === 'LV') processLV(items, w, g.cols);
-      else processGeneral(items, w, g.cols);
+      else processGeneralV5(items, w, g.cols); // V5 Logic
     }
     
     renderPreview();
@@ -411,7 +449,7 @@
       
       if (cIdx===0 && item.str.trim()) {
         if (currentRow) extractedData.push(currentRow);
-        currentRow = {c0:item.str, c1:"", c2:"", c3:"", c4:"", c5:""}; // Sabit anahtarlar kullan
+        currentRow = {c0:item.str, c1:"", c2:"", c3:"", c4:"", c5:""};
       } else if (currentRow) {
         const key = "c" + cIdx;
         if(currentRow[key] !== undefined) currentRow[key] += " " + item.str.trim();
@@ -420,26 +458,60 @@
     if (currentRow) extractedData.push(currentRow);
   }
 
-  function processGeneral(items, w, cols) {
-    let currentRow = [];
-    let lastY = -999;
+  /**
+   * V5.0 CORE LOGIC: MASTER COLUMN ROW GROUPING
+   * 1. Öğeleri görsel satırlara (visual lines) grupla.
+   * 2. Görsel satırın "Ana Sütun"u (Master Col) doluysa -> Yeni Mantıksal Satır.
+   * 3. Boşsa -> Önceki satıra yapıştır (Merge).
+   */
+  function processGeneralV5(items, w, cols) {
     const limits = cols.map(c => c*w);
     const colCount = limits.length + 1;
-    
+
+    // 1. Adım: Görsel Satırlara Grupla (Visual Grouping)
+    let visualLines = [];
+    let currentVLine = { y: -999, cells: new Array(colCount).fill("") };
+
     items.forEach(item => {
-      if (Math.abs(item.y - lastY) > 10) {
-        if (currentRow.length) extractedData.push(currentRow);
-        currentRow = new Array(colCount).fill("");
-        lastY = item.y;
+      // 8px'den fazla dikey fark varsa yeni görsel satır
+      if (Math.abs(item.y - currentVLine.y) > 8) {
+        if (currentVLine.y !== -999) visualLines.push(currentVLine);
+        currentVLine = { y: item.y, cells: new Array(colCount).fill("") };
       }
       
+      // Hangi sütun?
       let cIdx = 0;
       for(let i=0; i<limits.length; i++) if(item.x > limits[i]) cIdx = i+1;
       
-      if (currentRow[cIdx]) currentRow[cIdx] += " ";
-      currentRow[cIdx] += item.str.trim();
+      // Hücreye ekle
+      if (currentVLine.cells[cIdx]) currentVLine.cells[cIdx] += " ";
+      currentVLine.cells[cIdx] += item.str.trim();
     });
-    if (currentRow.length) extractedData.push(currentRow);
+    if (currentVLine.y !== -999) visualLines.push(currentVLine);
+
+    // 2. Adım: Mantıksal Birleştirme (Logical Merging via Master Col)
+    // Eğer masterColumnIndex sınır dışındaysa (örn. silindiyse) 0 al.
+    const safeMasterIdx = (masterColumnIndex < colCount) ? masterColumnIndex : 0;
+
+    visualLines.forEach(vLine => {
+      const masterVal = vLine.cells[safeMasterIdx];
+      const hasMasterData = masterVal && masterVal.length > 0; // Dolu mu?
+
+      // Kural: Ana sütun doluysa VEYA henüz hiç satır yoksa -> YENİ SATIR
+      if (hasMasterData || extractedData.length === 0) {
+        extractedData.push(vLine.cells);
+      } 
+      else {
+        // Ana sütun boş -> Önceki satıra ekle (Append)
+        let lastRow = extractedData[extractedData.length - 1];
+        for(let i=0; i<colCount; i++) {
+          if (vLine.cells[i]) {
+            // Varsa boşluk bırakıp ekle
+            lastRow[i] += (lastRow[i] ? "\n" : "") + vLine.cells[i];
+          }
+        }
+      }
+    });
   }
 
   // --- EXPORT ---
@@ -457,27 +529,26 @@
     div.innerHTML = "";
     const table = document.createElement('table');
     
-    // Header Row
+    // Header
     const tr = document.createElement('tr');
     if (extractionMode==='LV') {
       ['Poz No','Tanım','Birim','Miktar','B.Fiyat','Toplam'].forEach(t => {
         const th=document.createElement('th'); th.textContent=t; tr.appendChild(th);
       });
     } else {
-      // General Header from Settings
       const colCount = extractedData[0] ? extractedData[0].length : 0;
       for(let i=0; i<colCount; i++) {
         const th = document.createElement('th'); 
+        // V5: Başlıkları settings'den al
         th.textContent = columnSettings[i] ? columnSettings[i].title : `Sütun ${i+1}`;
         tr.appendChild(th);
       }
     }
     table.appendChild(tr);
 
-    // Data (First 50)
+    // Data (Limit 50)
     extractedData.slice(0, 50).forEach(row => {
       const r = document.createElement('tr');
-      // LV objesi veya General arrayi normalize et
       const vals = extractionMode==='LV' 
         ? [row.c0, row.c1, row.c2, row.c3, row.c4, row.c5]
         : row;
@@ -494,7 +565,7 @@
     const wb = XLSX.utils.book_new();
     let ws_data = [];
     
-    // 1. Header Oluştur
+    // Header
     let headers = [];
     if (extractionMode==='LV') {
       headers = ['Poz No','Tanım','Birim','Miktar','Birim Fiyat','Toplam'];
@@ -506,36 +577,35 @@
     }
     ws_data.push(headers);
 
-    // 2. Verileri Formatla ve Ekle
+    // Data Formatting
     extractedData.forEach(row => {
       let rowData = [];
       if (extractionMode==='LV') {
         const vals = [row.c0, row.c1, row.c2, row.c3, row.c4, row.c5];
-        // LV için hardcoded tipler (Miktar, Fiyat sayısal)
         rowData = [
             vals[0], vals[1], vals[2],
-            { t:'n', v:cleanNum(vals[3]), z:'#,##0.00' }, // Miktar
-            { t:'n', v:cleanNum(vals[4]), z:'#,##0.00 ₺' }, // Fiyat
-            { t:'n', v:cleanNum(vals[5]), z:'#,##0.00 ₺' }  // Toplam
+            { t:'n', v:cleanNum(vals[3]), z:'#,##0.00' },
+            { t:'n', v:cleanNum(vals[4]), z:'#,##0.00 ₺' },
+            { t:'n', v:cleanNum(vals[5]), z:'#,##0.00 ₺' }
         ];
       } else {
-        // General Mod: Kullanıcının seçtiği tiplere göre
         const vals = row;
         rowData = vals.map((val, idx) => {
           const type = columnSettings[idx] ? columnSettings[idx].type : 'text';
-          if (type === 'number') {
-            return { t:'n', v:cleanNum(val), z:'0.00' };
-          } else if (type === 'currency') {
-            return { t:'n', v:cleanNum(val), z:'#,##0.00 ₺' }; // TRY formatı
-          } else {
-            return val; // Text
-          }
+          if (type === 'number') return { t:'n', v:cleanNum(val), z:'0.00' };
+          else if (type === 'currency') return { t:'n', v:cleanNum(val), z:'#,##0.00 ₺' };
+          else return val; 
         });
       }
       ws_data.push(rowData);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    
+    // Sütun Genişlikleri (Otomatik biraz genişlet)
+    const wscols = headers.map(() => ({wch:20}));
+    ws['!cols'] = wscols;
+
     XLSX.utils.book_append_sheet(wb, ws, "Veriler");
     
     const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
@@ -544,7 +614,7 @@
     
     const a = document.createElement("a");
     a.href = url;
-    a.download = "Tablo_Export.xlsx";
+    a.download = "LV_Export_" + new Date().toISOString().slice(0,10) + ".xlsx";
     a.click();
   }
 </script>
