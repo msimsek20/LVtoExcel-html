@@ -2,452 +2,742 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LVtoExcel</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LVtoExcel (browser-only)</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:18px;color:#111}
-    h1{font-size:18px;margin:0 0 10px 0}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin-top:12px}
-    button{padding:8px 12px;border-radius:8px;border:1px solid #bbb;background:#f7f7f7;cursor:pointer}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    input[type=file]{border:1px solid #bbb;padding:8px;border-radius:8px;background:#fff}
-    #log{width:100%;height:140px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
-    table{border-collapse:collapse;width:100%;font-size:12px}
-    th,td{border:1px solid #ddd;padding:6px;vertical-align:top}
-    th{background:#fafafa;position:sticky;top:0}
-    .muted{color:#666;font-size:12px}
+    :root { --border:#d0d7de; --bg:#ffffff; --muted:#57606a; --shadow:0 1px 2px rgba(0,0,0,.06); }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 18px; color:#111; background:var(--bg); }
+    h1 { font-size: 20px; margin: 0 0 8px 0; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    .row { display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
+    .card { border:1px solid var(--border); border-radius: 10px; padding: 12px; box-shadow: var(--shadow); background:#fff; }
+    .btn { border:1px solid var(--border); background:#f6f8fa; padding: 8px 12px; border-radius: 8px; cursor:pointer; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    input[type="file"] { padding: 6px; }
+    .tiny { font-size: 12px; color: var(--muted); }
+    textarea { width:100%; height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 10px; border-radius: 10px; border:1px solid var(--border); }
+    table { width:100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border:1px solid var(--border); padding: 6px 8px; vertical-align: top; }
+    th { background:#f6f8fa; position: sticky; top: 0; z-index: 1; }
+    .grid { display:grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 1100px) { .grid { grid-template-columns: 520px 1fr; } }
+    .canvasWrap { position: relative; border:1px solid var(--border); border-radius: 10px; overflow: hidden; background:#fff; }
+    canvas { width:100%; height:auto; display:block; }
+    .overlay { position:absolute; inset:0; pointer-events:none; }
+    .guide { position:absolute; top:0; bottom:0; width:2px; background: rgba(255,0,0,0.75); pointer-events:auto; cursor: ew-resize; }
+    .guideLabel { position:absolute; top:6px; transform: translateX(-50%); background: rgba(255,255,255,0.9); border:1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color:#111; pointer-events:none; }
+    .kpi { display:flex; gap:10px; flex-wrap:wrap; }
+    .pill { border:1px solid var(--border); border-radius:999px; padding:4px 8px; font-size:12px; background:#fff; }
+    .warn { color:#b54708; }
   </style>
 </head>
 <body>
   <h1>LVtoExcel (browser-only)</h1>
-  <div class="muted">Loads local <code>pdf.min.js</code>, <code>pdf.worker.min.js</code>, <code>xlsx.full.min.js</code> from the same folder.</div>
+  <div class="sub">Loads local <b>pdf.min.js</b>, <b>pdf.worker.min.js</b>, <b>xlsx.full.min.js</b> from the same folder.</div>
 
   <div class="card">
-    <div class="row">
-      <input id="file" type="file" accept="application/pdf" />
-      <button id="btnLoad">Load PDF</button>
-      <button id="btnExtract" disabled>Extract</button>
-      <button id="btnExport" disabled>Export XLSX</button>
+    <div class="row" style="margin-bottom:8px;">
+      <input id="fileInput" type="file" accept="application/pdf" />
+      <button id="btnLoad" class="btn" disabled>Load PDF</button>
+      <button id="btnExtract" class="btn" disabled>Extract</button>
+      <button id="btnExport" class="btn" disabled>Export XLSX</button>
+      <div class="tiny">Output columns: Seite | Pos | Menge | Menge Einheit | EP | GP | Beschreibung</div>
     </div>
-    <div style="margin-top:10px" class="muted">
-      Output columns: Seite | Pos | Menge | Menge Einheit | EP | GP | Beschreibung
+
+    <div class="row" style="gap:18px; margin-top:6px;">
+      <div class="row" style="gap:8px;">
+        <button id="btnPrev" class="btn" disabled>◀ Page</button>
+        <button id="btnNext" class="btn" disabled>Page ▶</button>
+        <span class="tiny" id="pageInfo">No PDF loaded</span>
+      </div>
+
+      <div class="row" style="gap:10px;">
+        <label class="tiny"><input type="checkbox" id="chkCalib" /> Enable calibration guides</label>
+        <button id="btnSavePreset" class="btn" disabled>Save preset</button>
+        <button id="btnClearPreset" class="btn" disabled>Clear preset</button>
+        <span class="tiny" id="presetInfo"></span>
+      </div>
+    </div>
+
+    <div class="kpi" style="margin-top:8px;">
+      <span class="pill" id="kpiVersion"></span>
+      <span class="pill" id="kpiMode"></span>
+      <span class="pill" id="kpiCols"></span>
     </div>
   </div>
 
-  <div class="card">
-    <div style="font-weight:600;margin-bottom:6px">Log</div>
-    <textarea id="log" readonly></textarea>
+  <div class="grid" style="margin-top:12px;">
+    <div class="card">
+      <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom:8px;">
+        <div><b>PDF preview</b> <span class="tiny">(always available after Load PDF)</span></div>
+        <div class="tiny warn" id="previewWarn"></div>
+      </div>
+      <div class="canvasWrap" id="canvasWrap">
+        <canvas id="pdfCanvas"></canvas>
+        <div class="overlay" id="overlay"></div>
+      </div>
+      <div class="tiny" style="margin-top:8px;">
+        Calibration guides split the page into columns (Pos | Qty | Unit | EP | GP | Desc). Drag red lines when enabled.
+      </div>
+    </div>
+
+    <div class="card">
+      <b>Log</b>
+      <textarea id="log" readonly></textarea>
+      <div style="height:10px;"></div>
+      <b>Preview (first 50 rows)</b>
+      <div style="max-height: 360px; overflow:auto; border:1px solid var(--border); border-radius:10px; margin-top:8px;">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th>Seite</th>
+              <th>Pos</th>
+              <th>Menge</th>
+              <th>Menge Einheit</th>
+              <th>EP</th>
+              <th>GP</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
-  <div class="card" style="max-height:420px;overflow:auto">
-    <div style="font-weight:600;margin-bottom:6px">Preview (first 50 rows)</div>
-    <table id="tbl"></table>
-  </div>
-
-  <!-- Local libraries (no CDN) -->
+  <!-- Local dependencies (must be in same folder) -->
   <script src="./pdf.min.js"></script>
+  <script>
+    // pdf.js worker must be local, same folder.
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
+  </script>
   <script src="./xlsx.full.min.js"></script>
 
   <script>
-  "use strict";
+    // =========================
+    // Versioning
+    // =========================
+    const VERSION_TAG = "20251218_1400";
 
-  // Manual version tag (YYYYMMDD_HHMM)
-  const VERSION_TAG = "20251218_1200";
+    // =========================
+    // State
+    // =========================
+    let pdfDoc = null;
+    let currentPage = 1;
+    let fileMetaKey = null;
+    let extractedRows = [];
+    let preset = null; // { boundariesNorm: number[] }
+    let autoModel = null; // { boundariesNorm, centers, assignmentMode }
 
-  // pdf.js worker must be enabled
-  if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
-  }
+    // Calibration boundaries: 5 vertical boundaries splitting 6 columns
+    // [posEnd, qtyEnd, unitEnd, epEnd, gpEnd] in normalized [0..1] canvas x
+    const DEFAULT_BOUNDARIES = [0.22, 0.34, 0.44, 0.60, 0.72];
 
-  const elFile = document.getElementById("file");
-  const elLoad = document.getElementById("btnLoad");
-  const elExtract = document.getElementById("btnExtract");
-  const elExport = document.getElementById("btnExport");
-  const elLog = document.getElementById("log");
-  const elTbl = document.getElementById("tbl");
+    const UNIT_WORDS = new Set([
+      "m", "m2", "m3", "kg", "t", "stk", "st", "pausch", "psch", "l", "lfm",
+      "m²", "m³", "std", "h", "day", "wo", "qm", "cbm", "set", "pcs"
+    ]);
 
-  let pdfDoc = null;
-  let extractedRows = [];
-
-  function log(msg){
-    elLog.value += msg + "\n";
-    elLog.scrollTop = elLog.scrollHeight;
-  }
-
-  function normText(s){
-    if (s == null) return "";
-    return String(s)
-      .replace(/\u00a0/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function parseNumberDE(s){
-    s = normText(s);
-    if(!s) return null;
-    s = s.replace(/[^0-9,.\-]/g, "");
-    if(!s) return null;
-
-    // If comma is present, treat it as decimal separator and dots as thousands
-    if (s.indexOf(",") >= 0) s = s.replace(/\./g, "").replace(",", ".");
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  // Turn pdf.js text items into lines by grouping close y coordinates.
-  function itemsToLines(items){
-    const pts = items
-      .map(it => ({
-        x: it.transform[4],
-        y: it.transform[5],
-        s: normText(it.str),
-        w: (typeof it.width === "number" ? it.width : 0),
-      }))
-      .filter(p => p.s);
-
-    // Group by y with tolerance
-    pts.sort((a,b) => b.y - a.y);
-
-    const lines = [];
-    const yTol = 2.2;
-
-    for(const p of pts){
-      let line = null;
-      for(const l of lines){
-        if (Math.abs(l.y - p.y) <= yTol) { line = l; break; }
-      }
-      if(!line){
-        line = { y: p.y, parts: [] };
-        lines.push(line);
-      }
-      line.parts.push({ x: p.x, s: p.s, w: p.w });
-    }
-
-    for(const l of lines){
-      l.parts.sort((a,b)=>a.x-b.x);
-      l.text = l.parts.map(pp=>pp.s).join(" ").trim();
-    }
-
-    return lines;
-  }
-
-  // Identify dotted numeric codes
-  function isDottedNumeric(s){
-    s = normText(s);
-    if(!s) return false;
-    return /^\d[\d\.]*\d$/.test(s) && s.indexOf(".") !== -1;
-  }
-
-  // "pos": dotted numeric code ending with 4 digits (hard rule)
-  // "title": dotted numeric code NOT ending with 4 digits
-  function classifyNrStrict(s){
-    s = normText(s);
-    if(!isDottedNumeric(s)) return null;
-    const parts = s.split(".");
-    const last = parts[parts.length - 1];
-    if (/^\d{4}$/.test(last)) return "pos";
-    return "title";
-  }
-
-  // Optional override: some LVs use dotted codes not ending with 4 digits for positions.
-  // We keep the hard "title" rule unless the line clearly has quantity or prices.
-  function classifyNrWithOverride(nrTxt, qtyTxt, unitTxt, epTxt, gpTxt){
-    const base = classifyNrStrict(nrTxt);
-    if (base === "title") {
-      const hasQty = parseNumberDE(qtyTxt) !== null;
-      const hasPrice = parseNumberDE(epTxt) !== null || parseNumberDE(gpTxt) !== null;
-      if (hasQty || hasPrice) return "pos";
-    }
-    return base;
-  }
-
-  // Noise lines detection
-  function isNoiseLine(t){
-    t = normText(t);
-    if(!t) return true;
-    const low = t.toLowerCase();
-    if (/^seite\s+\d+(\s+von\s+\d+)?$/.test(low)) return true;
-    if (low.includes("seite") && low.includes("von")) return true;
-    if (low.includes("fortsetzung")) return true;
-    if (low.includes("übertrag") || low.includes("uebertrag")) return true;
-    if (low.startsWith("datum") && low.includes(":")) return true;
-    if (low.startsWith("projekt") && low.includes(":")) return true;
-    return false;
-  }
-
-  // A conservative "qty-only" check (prevents stealing description numbers like 20cm)
-  function looksLikeQtyOnly(t){
-    t = normText(t);
-    if(!t) return false;
-    // Allow: "10", "10,5", "1.234,56", optionally followed by a short unit token
-    return /^(\d{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?)(\s+[A-Za-zÄÖÜäöüß]{1,10})?$/.test(t);
-  }
-
-  // Column cuts: keep defaults, then auto-shrink the Nr column if position codes are far left.
-  // Also expose separate buckets for description / qty / unit / ep / gp.
-  function getCuts(pageWidth, lines){
-    const defaults = {
-      nrMax:   pageWidth * 0.26,
-      descMax: pageWidth * 0.70,
-      qtyMax:  pageWidth * 0.78,
-      unitMax: pageWidth * 0.84,
-      epMax:   pageWidth * 0.92,
-    };
-
-    try{
-      if(!lines || !lines.length) return defaults;
-
-      const ends = [];
-      const maxScan = Math.min(lines.length, 250);
-      for(let i=0;i<maxScan;i++){
-        const l = lines[i];
-        for(const part of (l.parts || [])){
-          const k = classifyNrStrict(part.s);
-          if(k === "pos" || k === "title"){
-            const endX = (part.x || 0) + (part.w || 0);
-            if(endX > 0 && endX < pageWidth) ends.push(endX);
-          }
-        }
-      }
-
-      if(ends.length >= 3){
-        ends.sort((a,b)=>a-b);
-        const p90 = ends[Math.floor(ends.length * 0.90)];
-        const margin = pageWidth * 0.02;
-
-        let nrMax = Math.min(defaults.nrMax, p90 + margin);
-        nrMax = Math.max(nrMax, pageWidth * 0.10);
-
-        // Keep space for description: never allow nrMax to invade description too much
-        nrMax = Math.min(nrMax, defaults.descMax - pageWidth * 0.10);
-
-        return { ...defaults, nrMax };
-      }
-    }catch(e){
-      // fall back
-    }
-    return defaults;
-  }
-
-  function splitLineByCuts(line, cuts){
-    let nr = "", desc = "", qty = "", unit = "", ep = "", gp = "";
-    for(const part of line.parts){
-      if(part.x <= cuts.nrMax) nr += (nr?" ":"") + part.s;
-      else if(part.x <= cuts.descMax) desc += (desc?" ":"") + part.s;
-      else if(part.x <= cuts.qtyMax) qty += (qty?" ":"") + part.s;
-      else if(part.x <= cuts.unitMax) unit += (unit?" ":"") + part.s;
-      else if(part.x <= cuts.epMax) ep += (ep?" ":"") + part.s;
-      else gp += (gp?" ":"") + part.s;
-    }
-    return {
-      nr: normText(nr),
-      desc: normText(desc),
-      qty: normText(qty),
-      unit: normText(unit),
-      ep: normText(ep),
-      gp: normText(gp),
-    };
-  }
-
-  function renderPreview(rows){
-    const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
-    const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
-    const show = rows.slice(0,50);
-
-    let html = "<thead><tr>" + header.map(h=>"<th>"+h+"</th>").join("") + "</tr></thead><tbody>";
-    for(const r of show){
-      html += "<tr>" + cols.map(k=>{
-        const v = (r[k] == null ? "" : String(r[k]));
-        const safe = v.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
-        return "<td>"+safe+"</td>";
-      }).join("") + "</tr>";
-    }
-    html += "</tbody>";
-    elTbl.innerHTML = html;
-  }
-
-  async function loadPdf(){
-    const f = elFile.files && elFile.files[0];
-    if(!f){ alert("Select a PDF file first."); return; }
-    if(!window.pdfjsLib){ alert("pdf.min.js not loaded (pdfjsLib missing)."); return; }
-
-    const buf = await f.arrayBuffer();
-    pdfDoc = await pdfjsLib.getDocument({data: buf}).promise;
-
-    log("LVtoExcel loaded. VERSION_TAG=" + VERSION_TAG);
-    log("PDF loaded. Pages: " + pdfDoc.numPages);
-    extractedRows = [];
-    renderPreview([]);
-    elExtract.disabled = false;
-    elExport.disabled = true;
-  }
-
-  async function extractLV(){
-    if(!pdfDoc){ alert("Load a PDF first."); return; }
-    log("Extract started...");
-
-    const out = [];
-    let current = null; // keep across pages until a new position begins
-
-    function flush(){
-      if(!current) return;
-      current.Beschreibung = (current.BeschreibungLines || []).join("\n").trim();
-      delete current.BeschreibungLines;
-      out.push(current);
-      current = null;
-    }
-
-    for(let p=1; p<=pdfDoc.numPages; p++){
-      const page = await pdfDoc.getPage(p);
-      const viewport = page.getViewport({scale: 1.0});
-      const pageWidth = viewport.width;
-
-      const content = await page.getTextContent({normalizeWhitespace: false, disableCombineTextItems: false});
-      const lines = itemsToLines(content.items);
-
-      const cuts = getCuts(pageWidth, lines);
-
-      for(const line of lines){
-        const raw = normText(line.text);
-        if(!raw) continue;
-        if(isNoiseLine(raw)) continue;
-
-        const parts = splitLineByCuts(line, cuts);
-
-        // Determine if this line starts a new position/title
-        const kind = classifyNrWithOverride(parts.nr, parts.qty, parts.unit, parts.ep, parts.gp);
-
-        if(kind === "title"){
-          // Title row: only Pos and Beschreibung
-          flush();
-          const titleDesc = normText([parts.desc, parts.qty, parts.unit, parts.ep, parts.gp].filter(Boolean).join(" "));
-          out.push({
-            Seite: "",
-            Pos: parts.nr,
-            Menge: "",
-            MengeEinheit: "",
-            EP: "",
-            GP: "",
-            Beschreibung: titleDesc
-          });
-          continue;
-        }
-
-        if(kind === "pos"){
-          // New position row
-          flush();
-          current = {
-            Seite: String(p),
-            Pos: parts.nr,
-            Menge: "",
-            MengeEinheit: "",
-            EP: "",
-            GP: "",
-            BeschreibungLines: []
-          };
-
-          // Description: keep line breaks by pushing per line
-          if(parts.desc && !isNoiseLine(parts.desc)) current.BeschreibungLines.push(parts.desc);
-
-          // Qty + unit (strict buckets)
-          const q = parseNumberDE(parts.qty);
-          if(q !== null) current.Menge = q;
-          if(parts.unit) current.MengeEinheit = parts.unit;
-
-          // Prices
-          const ep = parseNumberDE(parts.ep);
-          const gp = parseNumberDE(parts.gp);
-          if(ep !== null) current.EP = ep;
-          if(gp !== null) current.GP = gp;
-
-          continue;
-        }
-
-        // Continuation line for the current position
-        if(current){
-          // Update missing qty/unit if the line looks like it carries qty info
-          if((current.Menge === "" || current.Menge === null) && parts.qty){
-            if(looksLikeQtyOnly(parts.qty)){
-              const q = parseNumberDE(parts.qty);
-              if(q !== null) current.Menge = q;
-            }
-          }
-          if((!current.MengeEinheit) && parts.unit){
-            // Unit is typically a short token; accept if it is not noise
-            if(/^[A-Za-zÄÖÜäöüß]{1,10}$/.test(parts.unit)) current.MengeEinheit = parts.unit;
-          }
-
-          // Update missing prices if found
-          if((current.EP === "" || current.EP === null) && parts.ep){
-            const ep = parseNumberDE(parts.ep);
-            if(ep !== null) current.EP = ep;
-          }
-          if((current.GP === "" || current.GP === null) && parts.gp){
-            const gp = parseNumberDE(parts.gp);
-            if(gp !== null) current.GP = gp;
-          }
-
-          // Append description lines (do not strip numbers like 20cm)
-          if(parts.desc && !isNoiseLine(parts.desc)) current.BeschreibungLines.push(parts.desc);
-
-          // Some PDFs put left label column into "qty" bucket; only append if it is clearly not qty-only.
-          if(parts.qty && !looksLikeQtyOnly(parts.qty) && !isNoiseLine(parts.qty)) current.BeschreibungLines.push(parts.qty);
-          if(parts.unit && !/^[A-Za-zÄÖÜäöüß]{1,10}$/.test(parts.unit) && !isNoiseLine(parts.unit)) current.BeschreibungLines.push(parts.unit);
-
-          continue;
-        }
-      }
-    }
-
-    flush();
-    extractedRows = out;
-
-    log("Extract done. Rows: " + extractedRows.length);
-    renderPreview(extractedRows);
-
-    elExport.disabled = extractedRows.length === 0;
-  }
-
-  function exportXLSX(){
-    if(!extractedRows || !extractedRows.length){ alert("Run Extract first."); return; }
-    if(!window.XLSX){ alert("xlsx.full.min.js not loaded (XLSX missing)."); return; }
-
-    const header = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
-    const cols = ["Seite","Pos","Menge","MengeEinheit","EP","GP","Beschreibung"];
-    const data = [header, ...extractedRows.map(r => cols.map(k => r[k] ?? ""))];
-
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws["!cols"] = [
-      { wch: 6 },
-      { wch: 18 },
-      { wch: 10 },
-      { wch: 14 },
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 70 },
+    // Patterns for header/footer noise
+    const NOISE_PATTERNS = [
+      /seite\\s+\\d+\\s+von\\s+\\d+/i,
+      /übertrag/i,
+      /fortsetzung/i,
+      /summe/i,
+      /zwischensumme/i
     ];
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "LV");
+    // =========================
+    // UI Helpers
+    // =========================
+    const $ = (id) => document.getElementById(id);
+    function log(msg) {
+      const ta = $("log");
+      ta.value += msg + "\\n";
+      ta.scrollTop = ta.scrollHeight;
+    }
+    function setKpi() {
+      $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
+      const mode = (preset && preset.boundariesNorm) ? "Preset boundaries" : "Auto clustering";
+      $("kpiMode").textContent = "Mode: " + mode;
+      const b = (preset && preset.boundariesNorm) ? preset.boundariesNorm : (autoModel ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES);
+      $("kpiCols").textContent = "Boundaries: " + b.map(v => v.toFixed(2)).join(", ");
+    }
+    function clearTable() {
+      $("tbl").querySelector("tbody").innerHTML = "";
+    }
+    function renderTable(rows) {
+      const tbody = $("tbl").querySelector("tbody");
+      tbody.innerHTML = "";
+      const show = rows.slice(0, 50);
+      for (const r of show) {
+        const tr = document.createElement("tr");
+        const cols = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
+        for (const c of cols) {
+          const td = document.createElement("td");
+          td.textContent = (r[c] ?? "");
+          if (c === "Beschreibung") td.style.whiteSpace = "pre-wrap";
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
 
-    const out = XLSX.write(wb, { bookType:"xlsx", type:"array" });
-    const blob = new Blob([out], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    // =========================
+    // Preset storage
+    // =========================
+    function makeFileKey(file) {
+      return "LVtoExcel:preset:" + [file.name, file.size, file.lastModified].join("|");
+    }
+    function loadPresetForFile() {
+      if (!fileMetaKey) return null;
+      try {
+        const raw = localStorage.getItem(fileMetaKey);
+        if (!raw) return null;
+        const obj = JSON.parse(raw);
+        if (obj && Array.isArray(obj.boundariesNorm) && obj.boundariesNorm.length === 5) return obj;
+      } catch (_) {}
+      return null;
+    }
+    function savePresetForFile(boundariesNorm) {
+      if (!fileMetaKey) return;
+      const obj = { boundariesNorm };
+      localStorage.setItem(fileMetaKey, JSON.stringify(obj));
+      preset = obj;
+      updatePresetUI();
+      setKpi();
+      log("Preset saved.");
+    }
+    function clearPresetForFile() {
+      if (!fileMetaKey) return;
+      localStorage.removeItem(fileMetaKey);
+      preset = null;
+      updatePresetUI();
+      setKpi();
+      log("Preset cleared.");
+    }
+    function updatePresetUI() {
+      if (!fileMetaKey) {
+        $("presetInfo").textContent = "";
+        $("btnSavePreset").disabled = true;
+        $("btnClearPreset").disabled = true;
+        return;
+      }
+      preset = loadPresetForFile();
+      if (preset) {
+        $("presetInfo").textContent = "Preset loaded for this PDF.";
+        $("btnClearPreset").disabled = false;
+      } else {
+        $("presetInfo").textContent = "No preset for this PDF.";
+        $("btnClearPreset").disabled = true;
+      }
+      $("btnSavePreset").disabled = !$("chkCalib").checked;
+    }
 
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "LVtoExcel.xlsx";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-  }
+    // =========================
+    // PDF Preview (stabilized, independent)
+    // =========================
+    async function renderCurrentPage() {
+      if (!pdfDoc) return;
+      const page = await pdfDoc.getPage(currentPage);
+      const viewport = page.getViewport({ scale: 1.6 });
 
-  elLoad.addEventListener("click", () => loadPdf().catch(e => { console.error(e); alert(String(e)); }));
-  elExtract.addEventListener("click", () => extractLV().catch(e => { console.error(e); alert(String(e)); }));
-  elExport.addEventListener("click", exportXLSX);
+      const canvas = $("pdfCanvas");
+      const ctx = canvas.getContext("2d");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
 
-  log("Ready. VERSION_TAG=" + VERSION_TAG);
+      $("previewWarn").textContent = "";
+
+      const renderTask = page.render({ canvasContext: ctx, viewport });
+      await renderTask.promise;
+
+      $("pageInfo").textContent = `Page ${currentPage} / ${pdfDoc.numPages}`;
+
+      try {
+        const textContent = await page.getTextContent();
+        autoModel = buildAutoColumnModel(textContent, viewport.width);
+        if (!preset) applyGuides(autoModel.boundariesNorm);
+        else applyGuides(preset.boundariesNorm);
+      } catch (e) {
+        $("previewWarn").textContent = "Preview model warning: " + (e?.message || String(e));
+      }
+      setKpi();
+    }
+
+    // =========================
+    // Calibration guides
+    // =========================
+    const GUIDE_NAMES = ["Pos", "Qty", "Unit", "EP", "GP"];
+    let guides = []; // {el,labelEl,idx,normX}
+    function overlayRect() {
+      const canvas = $("pdfCanvas");
+      return canvas.getBoundingClientRect();
+    }
+    function applyGuides(boundariesNorm) {
+      const overlay = $("overlay");
+      overlay.innerHTML = "";
+      guides = [];
+      const rect = overlayRect();
+      const w = rect.width || 1;
+
+      boundariesNorm.forEach((nx, idx) => {
+        const x = nx * w;
+        const line = document.createElement("div");
+        line.className = "guide";
+        line.style.left = `${x}px`;
+
+        const label = document.createElement("div");
+        label.className = "guideLabel";
+        label.style.left = `${x}px`;
+        label.textContent = GUIDE_NAMES[idx];
+
+        overlay.appendChild(line);
+        overlay.appendChild(label);
+
+        guides.push({ el: line, labelEl: label, idx, normX: nx });
+      });
+
+      setGuidesEnabled($("chkCalib").checked);
+      attachGuideDrag();
+    }
+    function setGuidesEnabled(enabled) {
+      for (const g of guides) {
+        g.el.style.display = enabled ? "block" : "none";
+        g.labelEl.style.display = enabled ? "block" : "none";
+      }
+      $("btnSavePreset").disabled = !enabled;
+    }
+    function getBoundariesFromGuides() {
+      const arr = guides.map(g => g.normX).slice();
+      const clamped = arr.map(v => Math.max(0.05, Math.min(0.95, v)));
+      clamped.sort((a,b)=>a-b);
+      const minGap = 0.03;
+      for (let i=1;i<clamped.length;i++) {
+        if (clamped[i] - clamped[i-1] < minGap) clamped[i] = clamped[i-1] + minGap;
+      }
+      for (let i=0;i<clamped.length;i++) clamped[i] = Math.max(0.05, Math.min(0.95, clamped[i]));
+      return clamped;
+    }
+    function attachGuideDrag() {
+      for (const g of guides) {
+        g.el.onpointerdown = (ev) => {
+          if (!$("chkCalib").checked) return;
+          ev.preventDefault();
+          g.el.setPointerCapture(ev.pointerId);
+          const move = (e) => {
+            const rect = overlayRect();
+            const x = e.clientX - rect.left;
+            const nx = x / Math.max(1, rect.width);
+            g.normX = Math.max(0.02, Math.min(0.98, nx));
+            const px = g.normX * rect.width;
+            g.el.style.left = `${px}px`;
+            g.labelEl.style.left = `${px}px`;
+          };
+          const up = () => {
+            const b = getBoundariesFromGuides();
+            if (b.length === 5) applyGuides(b);
+            setKpi();
+          };
+          g.el.onpointermove = move;
+          g.el.onpointerup = up;
+        };
+      }
+    }
+
+    // =========================
+    // Auto Column Model (cluster + scoring)
+    // =========================
+    function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+
+    function snapToGap(x, centers, pageWidth) {
+      if (!centers || centers.length < 2) return x;
+      let best = x, bestDist = Infinity;
+      for (let i=0;i<centers.length-1;i++) {
+        const mid = (centers[i] + centers[i+1]) * 0.5;
+        const dist = Math.abs(mid - x);
+        if (dist < bestDist) { bestDist = dist; best = mid; }
+      }
+      return Math.max(pageWidth*0.05, Math.min(pageWidth*0.95, best));
+    }
+
+    function buildAutoColumnModel(textContent, pageWidthPx) {
+      const xs = [];
+      const items = textContent.items || [];
+      for (const it of items) {
+        const s = (it.str || "").trim();
+        if (!s) continue;
+        const x = it.transform[4];
+        const w = it.width || 0;
+        xs.push(x + w * 0.5);
+      }
+      if (xs.length < 30) {
+        return { boundariesNorm: DEFAULT_BOUNDARIES.slice(), centers: [], assignmentMode: "fallback" };
+      }
+
+      xs.sort((a,b)=>a-b);
+      const clusters = [];
+      const threshold = Math.max(10, pageWidthPx * 0.02);
+      let cur = [xs[0]];
+      for (let i=1;i<xs.length;i++) {
+        if (xs[i] - xs[i-1] <= threshold) cur.push(xs[i]);
+        else { clusters.push(cur); cur = [xs[i]]; }
+      }
+      clusters.push(cur);
+
+      const centers = clusters.map(c => c.reduce((a,b)=>a+b,0)/c.length).sort((a,b)=>a-b);
+
+      let keep = clusters.map((c, idx)=>({ idx, count:c.length, center: centers[idx] }));
+      keep.sort((a,b)=>b.count-a.count);
+      keep = keep.slice(0, Math.min(10, keep.length));
+      keep.sort((a,b)=>a.center-b.center);
+      const keptCenters = keep.map(k=>k.center);
+
+      const q = (p) => xs[Math.floor((xs.length-1)*p)];
+      const quant = [q(0.20), q(0.33), q(0.45), q(0.62), q(0.75)];
+      const boundariesPx = quant.map(v => snapToGap(v, keptCenters, pageWidthPx));
+      const boundariesNorm = boundariesPx.map(v => clamp01(v / Math.max(1, pageWidthPx)));
+
+      return { boundariesNorm, centers: keptCenters, assignmentMode: "auto" };
+    }
+
+    // =========================
+    // Parsing helpers
+    // =========================
+    function normalizeNumber(s) {
+      const t = s.replace(/\\s+/g,"").replace(/\\./g,"").replace(/,/g,".");
+      return t;
+    }
+    function isPriceToken(s) {
+      const t = s.replace(/\\s+/g,"");
+      if (!t) return false;
+      return /^(\\d{1,3}(\\.\\d{3})*|\\d+)([.,]\\d{2})$/.test(t) || /^(\\d+)([.,]\\d{2})$/.test(t);
+    }
+    function isQtyToken(s) {
+      const t = s.replace(/\\s+/g,"");
+      if (!t) return false;
+      if (/^\\d+$/.test(t)) return true;
+      if (/^\\d+[.,]\\d{1,3}$/.test(t)) return true;
+      return false;
+    }
+    function isUnitToken(s) {
+      const t = s.trim();
+      if (!t) return false;
+      return UNIT_WORDS.has(t.toLowerCase());
+    }
+    function isPosToken(s) {
+      const t = s.trim();
+      if (!t) return false;
+      if (/^\\d+(\\.\\d+)+$/.test(t)) return true;
+      if (/^\\d{1,6}$/.test(t)) return true;
+      if (/^[A-Z]\\d{1,3}([.-]\\d{1,4})+$/i.test(t)) return true;
+      return false;
+    }
+    function isTitleCode(t) {
+      const s = t.trim();
+      if (!/^\\d+(\\.\\d+)+$/.test(s)) return false;
+      return !/\\.\\d{4}$/.test(s);
+    }
+    function isNoiseLine(lineText) {
+      const t = lineText.trim();
+      if (!t) return true;
+      for (const re of NOISE_PATTERNS) if (re.test(t)) return true;
+      return false;
+    }
+
+    // =========================
+    // Extraction core
+    // =========================
+    function assignRoleByBoundaries(xMid, boundariesPx) {
+      if (xMid < boundariesPx[0]) return 0; // pos
+      if (xMid < boundariesPx[1]) return 1; // qty
+      if (xMid < boundariesPx[2]) return 2; // unit
+      if (xMid < boundariesPx[3]) return 3; // ep
+      if (xMid < boundariesPx[4]) return 4; // gp
+      return 5; // desc
+    }
+
+    function groupItemsIntoLines(items) {
+      const enriched = [];
+      for (const it of items) {
+        const s = (it.str || "");
+        if (!s.trim()) continue;
+        const x = it.transform[4];
+        const y = it.transform[5];
+        const w = it.width || 0;
+        enriched.push({ s, x, y, w, xMid: x + w*0.5 });
+      }
+      enriched.sort((a,b)=> b.y - a.y || a.x - b.x);
+      const lines = [];
+      const tol = 2.5;
+      for (const e of enriched) {
+        const last = lines[lines.length-1];
+        if (!last || Math.abs(last.y - e.y) > tol) lines.push({ y: e.y, items: [e] });
+        else last.items.push(e);
+      }
+      for (const ln of lines) ln.items.sort((a,b)=>a.x-b.x);
+      return lines;
+    }
+
+    function scoreLine(line, boundariesPx) {
+      const regions = [[],[],[],[],[],[]];
+      for (const it of line.items) {
+        const r = assignRoleByBoundaries(it.xMid, boundariesPx);
+        regions[r].push(it.s.trim());
+      }
+      const posText = regions[0].join(" ").trim();
+      const qtyText = regions[1].join(" ").trim();
+      const unitText = regions[2].join(" ").trim();
+      const epText  = regions[3].join(" ").trim();
+      const gpText  = regions[4].join(" ").trim();
+      const descText = regions[5].join(" ").trim();
+
+      const posLike = isPosToken(posText);
+      const titleLike = isTitleCode(posText);
+      const qtyLike = isQtyToken(qtyText) || isQtyToken(descText);
+      const unitLike = isUnitToken(unitText);
+      const epLike = isPriceToken(epText);
+      const gpLike = isPriceToken(gpText);
+
+      const labelLike =
+        /^(zweck|vorleistung|folge(?:leistung)?|abdichtung|anforderung|auflagerfläche|wanddicke)\\s*:/i.test(descText);
+
+      return { regions, posText, qtyText, unitText, epText, gpText, descText, posLike, titleLike, qtyLike, unitLike, epLike, gpLike, labelLike };
+    }
+
+    function isNewPositionLine(sig) {
+      const posEnds4 = /\\.\\d{4}$/.test(sig.posText.trim());
+      if (sig.posLike && !sig.titleLike) {
+        if (sig.qtyLike || sig.epLike || sig.gpLike) return true;
+        if (posEnds4) return true;
+      }
+      return false;
+    }
+    function isTitleLine(sig) {
+      return sig.titleLike && !sig.qtyLike && !sig.epLike && !sig.gpLike;
+    }
+    function cleanDescLine(t) {
+      return t.replace(/[ \\t]+/g, " ").trim();
+    }
+    function flushOpen(openPos, rowsOut) {
+      if (!openPos) return null;
+      const desc = openPos.descLines.filter(Boolean).join("\\n").trim();
+      rowsOut.push({
+        "Seite": openPos.pageStart ?? "",
+        "Pos": openPos.pos ?? "",
+        "Menge": openPos.qty ?? "",
+        "Menge Einheit": openPos.unit ?? "",
+        "EP": openPos.ep ?? "",
+        "GP": openPos.gp ?? "",
+        "Beschreibung": desc
+      });
+      return null;
+    }
+
+    async function extractAllPages() {
+      if (!pdfDoc) return;
+      extractedRows = [];
+      clearTable();
+      log("Extract started...");
+
+      let openPos = null;
+
+      for (let p = 1; p <= pdfDoc.numPages; p++) {
+        const page = await pdfDoc.getPage(p);
+        const viewport = page.getViewport({ scale: 1.0 });
+        const textContent = await page.getTextContent();
+
+        const pageModel = buildAutoColumnModel(textContent, viewport.width);
+        const activeBoundariesNorm =
+          (preset && preset.boundariesNorm) ? preset.boundariesNorm : pageModel.boundariesNorm;
+        const boundariesPx = activeBoundariesNorm.map(v => v * viewport.width);
+
+        const lines = groupItemsIntoLines(textContent.items || []);
+
+        for (const ln of lines) {
+          const fullLineText = ln.items.map(x => x.s).join(" ").replace(/\\s+/g," ").trim();
+          if (isNoiseLine(fullLineText)) continue;
+
+          const sig = scoreLine(ln, boundariesPx);
+
+          if (isTitleLine(sig)) {
+            if (openPos && openPos.descLines.length > 0) openPos = flushOpen(openPos, extractedRows);
+            extractedRows.push({
+              "Seite": "",
+              "Pos": sig.posText.trim(),
+              "Menge": "",
+              "Menge Einheit": "",
+              "EP": "",
+              "GP": "",
+              "Beschreibung": cleanDescLine(sig.descText || fullLineText.replace(sig.posText, ""))
+            });
+            continue;
+          }
+
+          if (isNewPositionLine(sig)) {
+            openPos = flushOpen(openPos, extractedRows);
+            openPos = { pageStart: p, pos: sig.posText.trim(), qty: "", unit: "", ep: "", gp: "", descLines: [] };
+
+            if (isQtyToken(sig.qtyText)) openPos.qty = sig.qtyText.replace(/\\s+/g,"").trim();
+            else if (isQtyToken(sig.descText) && !sig.labelLike) openPos.qty = sig.descText.replace(/\\s+/g,"").trim();
+
+            if (isUnitToken(sig.unitText)) openPos.unit = sig.unitText.trim();
+            if (isPriceToken(sig.epText)) openPos.ep = normalizeNumber(sig.epText.trim());
+            if (isPriceToken(sig.gpText)) openPos.gp = normalizeNumber(sig.gpText.trim());
+
+            const descCandidate = (sig.descText || "").trim();
+            if (descCandidate) openPos.descLines.push(cleanDescLine(descCandidate));
+            continue;
+          }
+
+          if (openPos) {
+            const maybeQty = sig.qtyText || sig.posText;
+            const maybeUnit = sig.unitText || sig.qtyText;
+
+            if (!openPos.qty && isQtyToken(maybeQty) && !sig.labelLike) openPos.qty = maybeQty.replace(/\\s+/g,"").trim();
+            if (!openPos.unit && isUnitToken(maybeUnit)) openPos.unit = maybeUnit.trim();
+
+            if (!openPos.ep && (isPriceToken(sig.epText) || isPriceToken(sig.descText))) {
+              const token = isPriceToken(sig.epText) ? sig.epText : sig.descText;
+              openPos.ep = normalizeNumber(token.trim());
+            }
+            if (!openPos.gp && isPriceToken(sig.gpText)) openPos.gp = normalizeNumber(sig.gpText.trim());
+
+            const descLine = (sig.descText || fullLineText).trim();
+            const cleaned = cleanDescLine(descLine);
+            if (cleaned && !isNoiseLine(cleaned)) {
+              const leaderOnly = /^((m\\s+EP|EP|GP)\\s*[.\\s]*\\d*[.,]?\\d*)$/i.test(cleaned);
+              if (!leaderOnly) openPos.descLines.push(cleaned);
+            }
+          }
+        }
+      }
+
+      openPos = flushOpen(openPos, extractedRows);
+
+      log("Extract done. Rows: " + extractedRows.length);
+      renderTable(extractedRows);
+      $("btnExport").disabled = extractedRows.length === 0;
+    }
+
+    // =========================
+    // Export
+    // =========================
+    function exportXlsx() {
+      if (!extractedRows || extractedRows.length === 0) return;
+      const cols = ["Seite","Pos","Menge","Menge Einheit","EP","GP","Beschreibung"];
+      const wsData = [cols];
+      for (const r of extractedRows) wsData.push(cols.map(c => r[c] ?? ""));
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "LV");
+      XLSX.writeFile(wb, "LVtoExcel_" + VERSION_TAG + ".xlsx");
+      log("XLSX exported.");
+    }
+
+    // =========================
+    // Wire up UI
+    // =========================
+    (function init() {
+      log("Ready. VERSION_TAG=" + VERSION_TAG);
+      setKpi();
+
+      $("fileInput").addEventListener("change", () => {
+        const f = $("fileInput").files?.[0] || null;
+        $("btnLoad").disabled = !f;
+        $("btnExtract").disabled = true;
+        $("btnExport").disabled = true;
+        pdfDoc = null;
+        currentPage = 1;
+        extractedRows = [];
+        clearTable();
+        if (f) {
+          fileMetaKey = makeFileKey(f);
+          preset = loadPresetForFile();
+          updatePresetUI();
+          setKpi();
+          log("File selected: " + f.name);
+        }
+      });
+
+      $("btnLoad").addEventListener("click", async () => {
+        const f = $("fileInput").files?.[0];
+        if (!f) return;
+        try {
+          const buf = await f.arrayBuffer();
+          const loadingTask = pdfjsLib.getDocument({ data: buf });
+          pdfDoc = await loadingTask.promise;
+          currentPage = 1;
+          log("PDF loaded. Pages: " + pdfDoc.numPages);
+          $("btnPrev").disabled = false;
+          $("btnNext").disabled = false;
+          $("btnExtract").disabled = false;
+          await renderCurrentPage();
+          updatePresetUI();
+          setKpi();
+        } catch (e) {
+          log("ERROR loading PDF: " + (e?.message || String(e)));
+        }
+      });
+
+      $("btnPrev").addEventListener("click", async () => {
+        if (!pdfDoc) return;
+        currentPage = Math.max(1, currentPage - 1);
+        await renderCurrentPage();
+      });
+      $("btnNext").addEventListener("click", async () => {
+        if (!pdfDoc) return;
+        currentPage = Math.min(pdfDoc.numPages, currentPage + 1);
+        await renderCurrentPage();
+      });
+
+      $("chkCalib").addEventListener("change", () => {
+        setGuidesEnabled($("chkCalib").checked);
+        updatePresetUI();
+        if ($("chkCalib").checked) {
+          const b = (preset && preset.boundariesNorm) ? preset.boundariesNorm
+                  : (autoModel && autoModel.boundariesNorm) ? autoModel.boundariesNorm
+                  : DEFAULT_BOUNDARIES;
+          applyGuides(b);
+        }
+        setKpi();
+      });
+
+      $("btnSavePreset").addEventListener("click", () => {
+        if (!$("chkCalib").checked) return;
+        const b = getBoundariesFromGuides();
+        savePresetForFile(b);
+      });
+      $("btnClearPreset").addEventListener("click", () => {
+        clearPresetForFile();
+        const b = (autoModel && autoModel.boundariesNorm) ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES;
+        applyGuides(b);
+      });
+
+      $("btnExtract").addEventListener("click", async () => {
+        if (!pdfDoc) return;
+        if ($("chkCalib").checked && guides.length === 5) {
+          const b = getBoundariesFromGuides();
+          preset = { boundariesNorm: b }; // session-only unless saved
+          log("Calibration active: using current guides for extraction.");
+        } else {
+          preset = loadPresetForFile();
+        }
+        setKpi();
+        try {
+          await extractAllPages();
+        } catch (e) {
+          log("ERROR extracting: " + (e?.message || String(e)));
+        }
+      });
+
+      $("btnExport").addEventListener("click", exportXlsx);
+
+      applyGuides(DEFAULT_BOUNDARIES);
+      setGuidesEnabled(false);
+      updatePresetUI();
+      setKpi();
+    })();
   </script>
 </body>
 </html>
