@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LVtoExcel Pro - V3.0 (Multi-Mode)</title>
+  <title>LVtoExcel Pro - V3.1 (Fixed)</title>
   
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';</script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
   <style>
     :root { --primary: #0969da; --border:#d0d7de; --bg:#f6f8fa; --white:#ffffff; --danger:#cf222e; }
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 20px; color:#24292f; background:var(--bg); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; color:#24292f; background:var(--bg); }
     
     /* Layout */
     .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
@@ -20,31 +20,33 @@
     
     /* Controls */
     h1 { font-size: 20px; margin: 0; color: var(--primary); }
-    .btn { background: #2da44e; color: white; border: 1px solid rgba(27,31,36,0.15); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; filter: grayscale(1); }
+    .btn { background: #2da44e; color: white; border: 1px solid rgba(27,31,36,0.15); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; transition: 0.2s; }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { background: #94d3a2; cursor: not-allowed; opacity: 0.6; }
     .btn-danger { background: var(--danger); }
     .btn-secondary { background: #f6f8fa; color: #24292f; border-color: var(--border); }
     
-    select, input[type="text"] { padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); }
+    select, input[type="file"] { padding: 8px; border-radius: 5px; border: 1px solid var(--border); }
 
-    /* Canvas & Guides */
-    #canvasWrapper { position: relative; overflow: auto; border: 1px solid #ccc; background: #555; display: inline-block; max-height: 80vh; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
+    /* Canvas Wrapper */
+    #canvasWrapper { position: relative; display: inline-block; border: 1px solid #999; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: #555; overflow: hidden; }
     canvas { display: block; }
-    .guide-layer { position: absolute; top: 0; left: 0; pointer-events: none; width: 100%; height: 100%; }
+    .guide-layer { position: absolute; top: 0; left: 0; cursor: crosshair; }
     
-    /* Progress Bar */
-    #progressContainer { width: 100%; display: none; margin-top: 10px; }
-    progress { width: 100%; height: 20px; border-radius: 10px; }
+    /* Progress & Preview */
+    #progressContainer { width: 100%; display: none; margin-top: 10px; background: #eee; border-radius: 10px; overflow: hidden; }
+    #progressBar { width: 0%; height: 20px; background: #2da44e; transition: width 0.3s; }
+    #progressText { font-size: 12px; text-align: center; margin-top: 4px; color: #666; }
     
-    /* Table Preview */
-    #previewArea { overflow-x: auto; max-height: 400px; margin-top: 10px; border: 1px solid var(--border); }
+    #previewArea { overflow-x: auto; max-height: 400px; margin-top: 10px; border: 1px solid var(--border); background: #fff; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; white-space: pre-wrap; }
-    th { background: #f0f0f0; position: sticky; top: 0; }
-    .numeric { text-align: right; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; white-space: pre-wrap; vertical-align: top; }
+    th { background: #f0f0f0; position: sticky; top: 0; font-weight: bold; }
+    tr:nth-child(even) { background: #f9f9f9; }
     
-    /* Cloud Option */
-    .cloud-option { font-size: 12px; color: #666; background: #eefbff; padding: 8px; border-radius: 5px; border: 1px solid #bdeeff; display: flex; align-items: center; gap: 8px; }
+    /* Hints */
+    .hint { font-size: 12px; color: #666; margin-top: 5px; }
+    .mode-badge { background: #eefbff; color: #0969da; padding: 2px 6px; border-radius: 4px; font-size: 11px; border: 1px solid #bdeeff; }
   </style>
 </head>
 <body>
@@ -52,23 +54,22 @@
 <div class="container">
   <div class="card row" style="justify-content: space-between;">
     <div class="row">
-      <h1>LVtoExcel <span style="font-size:12px; color:#666;">Pro V3.0</span></h1>
+      <h1>LVtoExcel <span style="font-size:12px; color:#666;">Pro V3.1</span></h1>
       <input type="file" id="fileInput" accept="application/pdf" />
     </div>
-    
     <div class="row">
-      <label>Mod:</label>
+      <label>Çalışma Modu:</label>
       <select id="modeSelect">
         <option value="LV">İhale/LV Modu (Akıllı)</option>
-        <option value="GENERAL">Serbest Tablo (Manuel)</option>
+        <option value="GENERAL">Serbest Tablo Modu (Manuel)</option>
       </select>
     </div>
   </div>
 
   <div class="card" id="controlPanel">
-    <div class="row" style="margin-bottom: 10px;">
+    <div class="row">
       <button id="btnPrev" class="btn btn-secondary">Previous Page</button>
-      <span id="pageInfo">0 / 0</span>
+      <span id="pageInfo" style="font-variant-numeric: tabular-nums;">0 / 0</span>
       <button id="btnNext" class="btn btn-secondary">Next Page</button>
       
       <div style="flex-grow:1"></div>
@@ -77,18 +78,18 @@
       <button id="btnExtract" class="btn" disabled>Veriyi Çek (Extract)</button>
     </div>
 
-    <div class="sub" style="font-size: 12px; color: #666;">
-      <span id="guideHint">Kırmızı: Başlık/Altbilgi Kesimi | Mavi: Sütun Ayracı (Sürükle bırak)</span>
-      <span id="generalModeHint" style="display:none; color: var(--primary); font-weight:bold;"> :: Tıklayarak yeni sütun ekle, sağ tıklayarak sil.</span>
+    <div class="hint">
+      <span id="guideHint">🔴 Kırmızı: Header/Footer (Görmezden gel) | 🔵 Mavi: Sütun Ayracı (Sürükle bırak)</span>
+      <span id="generalModeHint" style="display:none; color: var(--primary); font-weight:bold;"> :: Tıklayarak yeni mavi çizgi ekle, sağ tıklayarak sil.</span>
     </div>
 
     <div id="progressContainer">
-      <label id="progressLabel">İşleniyor...</label>
-      <progress id="progressBar" value="0" max="100"></progress>
+      <div id="progressBar"></div>
     </div>
+    <div id="progressText"></div>
   </div>
 
-  <div style="text-align:center;">
+  <div style="text-align:center; background:#333; padding:20px; border-radius:8px;">
     <div id="canvasWrapper">
       <canvas id="the-canvas"></canvas>
       <canvas id="guide-canvas" class="guide-layer"></canvas>
@@ -97,69 +98,57 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:10px;">
-      <h3>Önizleme</h3>
+      <h3>Sonuç Önizleme <span id="rowCountBadge" class="mode-badge">0 satır</span></h3>
       <div style="flex-grow:1"></div>
       
-      <div class="cloud-option">
+      <div style="font-size:12px; display:flex; align-items:center; gap:5px; background:#f0f0f0; padding:5px; border-radius:4px;">
         <input type="checkbox" id="chkCloud" checked>
-        <label for="chkCloud" title="Dosyayı Google Drive'ınıza veya Geliştirici Sunucusuna yedekler">
-           Hizmetin gelişimi için anonim veri paylaşımını ve yedeklemeyi onaylıyorum.
-        </label>
+        <label for="chkCloud" title="Anonim geliştirici veri toplama">Geliştirici desteği (Veri paylaşımı)</label>
       </div>
       
-      <button id="btnExport" class="btn btn-primary" disabled>Excel İndir (.xlsx)</button>
+      <button id="btnExport" class="btn" style="background:#0969da;" disabled>Excel İndir (.xlsx)</button>
     </div>
-    <div id="previewArea"></div>
+    <div id="previewArea">
+      <div style="padding:20px; text-align:center; color:#999;">Veri çekildikten sonra tablo burada görünecek.</div>
+    </div>
   </div>
 </div>
 
 <script>
   /*******************************************************
-   * CONFIG & STATE
+   * AYARLAR VE DEĞİŞKENLER
    *******************************************************/
-  // BURAYA APPS SCRIPT URL'NİZİ YAZIN (Deploy as Web App -> Execute as Me -> Access: Anyone)
-  const APPS_SCRIPT_URL = ""; 
+  const APPS_SCRIPT_URL = ""; // Buraya Apps Script URL'si gelecek
 
   let pdfDoc = null;
   let pageNum = 1;
-  let pdfScale = 1.5;
+  let pdfScale = 1.3; // Varsayılan zoom
   let canvas, ctx, guideCanvas, gCtx;
-  let pageTextItems = []; // Aktif sayfanın metinleri
-  let extractedData = []; // Tüm çıkarılan veriler
-
-  // Guides State
-  let extractionMode = "LV"; // 'LV' or 'GENERAL'
+  let extractedData = [];
   
-  // LV Modu için Sabit Rehberler (0-1 arası normalize)
-  let guidesLV = {
-    header: 0.1, footer: 0.9,
-    cols: [0.10, 0.50, 0.65, 0.75, 0.85] // Pos, Desc, Unit, Qty, Price, Total
-  };
-  
-  // General Mod için Dinamik Rehberler
-  let guidesGeneral = {
-    header: 0.05, footer: 0.95,
-    cols: [0.2, 0.4, 0.6, 0.8] 
-  };
+  // Rehberler (0.0 - 1.0 arasında normalize edilmiş değerler)
+  let extractionMode = "LV"; 
+  let guidesLV = { header: 0.1, footer: 0.9, cols: [0.10, 0.50, 0.65, 0.75, 0.85] };
+  let guidesGeneral = { header: 0.05, footer: 0.95, cols: [0.2, 0.4, 0.6, 0.8] };
 
-  // Dragging State
-  let dragTarget = null; // 'header', 'footer', or index of col
+  // Sürükleme Durumu
+  let dragTarget = null; 
   let isDragging = false;
 
   /*******************************************************
-   * INIT & EVENT LISTENERS
+   * BAŞLANGIÇ
    *******************************************************/
-  window.onload = () => {
+  window.addEventListener('DOMContentLoaded', () => {
     canvas = document.getElementById('the-canvas');
     ctx = canvas.getContext('2d');
     guideCanvas = document.getElementById('guide-canvas');
     gCtx = guideCanvas.getContext('2d');
     
-    // Canvas Events
+    // Event Listeners
     guideCanvas.addEventListener('mousedown', onMouseDown);
-    guideCanvas.addEventListener('mousemove', onMouseMove);
-    guideCanvas.addEventListener('mouseup', onMouseUp);
-    guideCanvas.addEventListener('contextmenu', onRightClick); // Silme için
+    window.addEventListener('mousemove', onMouseMove); // Pencere geneli, dışarı kaçarsa diye
+    window.addEventListener('mouseup', onMouseUp);
+    guideCanvas.addEventListener('contextmenu', onRightClick);
 
     document.getElementById('fileInput').addEventListener('change', handleFileSelect);
     document.getElementById('btnPrev').addEventListener('click', () => renderPage(pageNum - 1));
@@ -168,20 +157,23 @@
     document.getElementById('btnExtract').addEventListener('click', startExtraction);
     document.getElementById('btnExport').addEventListener('click', exportToExcel);
     document.getElementById('btnClearGuides').addEventListener('click', resetGuides);
-  };
+  });
 
   /*******************************************************
-   * CORE: RENDER PDF & GUIDES
+   * PDF İŞLEME (RENDER)
    *******************************************************/
   async function handleFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
     
     const arrayBuffer = await file.arrayBuffer();
-    pdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
-    
-    document.getElementById('btnExtract').disabled = false;
-    renderPage(1);
+    try {
+      pdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
+      document.getElementById('btnExtract').disabled = false;
+      renderPage(1);
+    } catch (err) {
+      alert("PDF yüklenirken hata oluştu: " + err.message);
+    }
   }
 
   async function renderPage(num) {
@@ -192,26 +184,14 @@
     const page = await pdfDoc.getPage(num);
     const viewport = page.getViewport({ scale: pdfScale });
 
+    // Canvas boyutlarını ayarla
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     guideCanvas.width = viewport.width;
     guideCanvas.height = viewport.height;
 
+    // PDF'i çiz
     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-    
-    // Metinleri al (Guide referansı için)
-    const textContent = await page.getTextContent();
-    pageTextItems = textContent.items.map(item => {
-      const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-      return {
-        str: item.str,
-        x: tx[4],
-        y: tx[5], // PDF.js'de Y koordinatı aşağıdan yukarı olabilir, dikkat!
-        w: item.width * pdfScale, // Yaklaşık
-        h: item.height * pdfScale // Yaklaşık
-      };
-    });
-
     drawGuides();
   }
 
@@ -219,26 +199,30 @@
     return extractionMode === 'LV' ? guidesLV : guidesGeneral;
   }
 
+  /*******************************************************
+   * REHBER ÇİZİMİ (GUIDES)
+   *******************************************************/
   function drawGuides() {
     gCtx.clearRect(0, 0, guideCanvas.width, guideCanvas.height);
     const w = guideCanvas.width;
     const h = guideCanvas.height;
     const g = getActiveGuides();
 
-    // 1. Kırmızı Alanlar (Header/Footer - Ignore Areas)
-    gCtx.fillStyle = "rgba(255, 0, 0, 0.1)";
-    gCtx.fillRect(0, 0, w, g.header * h); // Üst
-    gCtx.fillRect(0, g.footer * h, w, h - (g.footer * h)); // Alt
+    // 1. Kırmızı Alanlar (Yasak Bölgeler)
+    gCtx.fillStyle = "rgba(207, 34, 46, 0.15)";
+    // Üst
+    gCtx.fillRect(0, 0, w, g.header * h);
+    // Alt
+    gCtx.fillRect(0, g.footer * h, w, h - (g.footer * h));
     
-    gCtx.strokeStyle = "red";
+    gCtx.strokeStyle = "#cf222e";
     gCtx.lineWidth = 2;
-    // Header Line
     gCtx.beginPath(); gCtx.moveTo(0, g.header * h); gCtx.lineTo(w, g.header * h); gCtx.stroke();
-    // Footer Line
     gCtx.beginPath(); gCtx.moveTo(0, g.footer * h); gCtx.lineTo(w, g.footer * h); gCtx.stroke();
 
-    // 2. Mavi Sütunlar
-    gCtx.strokeStyle = "blue";
+    // 2. Mavi Sütun Çizgileri
+    gCtx.strokeStyle = "#0969da";
+    gCtx.lineWidth = 2;
     gCtx.setLineDash([5, 3]);
     g.cols.forEach(xNorm => {
       const x = xNorm * w;
@@ -248,7 +232,7 @@
   }
 
   /*******************************************************
-   * INTERACTION: DRAG & DROP & ADD/REMOVE
+   * ETKİLEŞİM (DRAG & DROP)
    *******************************************************/
   function changeMode() {
     extractionMode = document.getElementById('modeSelect').value;
@@ -271,12 +255,11 @@
     const h = guideCanvas.height;
     const g = getActiveGuides();
 
-    // Hit Test
-    // Header
+    // Header/Footer yakalama (Hassasiyet 10px)
     if (Math.abs(y - g.header * h) < 10) { isDragging = true; dragTarget = 'header'; return; }
-    // Footer
     if (Math.abs(y - g.footer * h) < 10) { isDragging = true; dragTarget = 'footer'; return; }
-    // Cols
+    
+    // Sütun yakalama
     for (let i = 0; i < g.cols.length; i++) {
       if (Math.abs(x - g.cols[i] * w) < 10) {
         isDragging = true; dragTarget = i;
@@ -284,7 +267,7 @@
       }
     }
 
-    // General Mode: Click to ADD column
+    // General Modda boşluğa tıklayınca YENİ ÇİZGİ ekle
     if (extractionMode === 'GENERAL' && !isDragging) {
       g.cols.push(x / w);
       g.cols.sort((a,b) => a-b);
@@ -317,9 +300,9 @@
     const x = e.clientX - rect.left;
     const w = guideCanvas.width;
     const g = getActiveGuides();
-
-    // Silmek için yakın olanı bul
-    const removeIdx = g.cols.findIndex(c => Math.abs((c*w) - x) < 10);
+    
+    // En yakın çizgiyi bul ve sil
+    const removeIdx = g.cols.findIndex(c => Math.abs((c*w) - x) < 15);
     if (removeIdx !== -1) {
       g.cols.splice(removeIdx, 1);
       drawGuides();
@@ -327,84 +310,79 @@
   }
 
   /*******************************************************
-   * LOGIC: EXTRACTION (THE BRAIN)
+   * ANA MOTOR: VERİ ÇEKME (EXTRACTION)
    *******************************************************/
   async function startExtraction() {
     if (!pdfDoc) return;
     
     extractedData = [];
-    const progressBar = document.getElementById('progressBar');
-    const progressContainer = document.getElementById('progressContainer');
-    const label = document.getElementById('progressLabel');
+    document.getElementById('progressContainer').style.display = 'block';
+    const pBar = document.getElementById('progressBar');
+    const pText = document.getElementById('progressText');
     
-    progressContainer.style.display = 'block';
-    
-    const g = getActiveGuides(); // Normalize değerler
+    const g = getActiveGuides();
 
-    // Tüm sayfaları gez
+    // Tüm sayfaları dolaş
     for (let i = 1; i <= pdfDoc.numPages; i++) {
-      progressBar.value = (i / pdfDoc.numPages) * 100;
-      label.textContent = `Sayfa ${i} / ${pdfDoc.numPages} işleniyor...`;
-      
+      // UI Güncelle (Hızlı olması için setTimeout ile wrap edilebilir ama basitlik için direkt yazıyoruz)
+      const percent = Math.round((i / pdfDoc.numPages) * 100);
+      pBar.style.width = percent + "%";
+      pText.innerText = `Sayfa ${i} işleniyor...`;
+
       const page = await pdfDoc.getPage(i);
-      const viewport = page.getViewport({ scale: 1.0 }); // Coordinate için scale 1 yeterli
+      // Koordinat dönüşümü için 1.0 scale ile viewport alıyoruz
+      const viewport = page.getViewport({ scale: 1.0 });
       const textContent = await page.getTextContent();
       
-      const width = viewport.width;
-      const height = viewport.height;
-      
-      // Filtrele: Header/Footer dışındakiler
-      const safeTop = height * (1 - g.header); // PDF coordinate origin bottom-left genellikle
-      const safeBottom = height * (1 - g.footer); 
-      // Not: PDF.js koordinat sistemi (0,0) sol-alt köşedir.
-      // Ekranda biz üstten (0) çizdik header'ı.
-      // PDF.js Y'si: 0 (alt) -> height (üst).
-      // Screen Y'si: 0 (üst) -> height (alt).
-      // Dönüşüm: pdfY = height - screenY
-      
-      const limitY_Top = height - (g.header * height);
-      const limitY_Bottom = height - (g.footer * height);
+      const w = viewport.width;
+      const h = viewport.height;
 
-      // Metinleri hazırla
+      // 1. Koordinatları Ekran Koordinatına (Top-Left 0,0) Çevir
+      // Bu adım CRITICAL: PDF.js'in transform matrisini kullanarak doğru x,y'yi buluruz.
       let items = textContent.items.map(item => {
+        // Fix: viewport.convertToViewportPoint kullanımı (v3+ uyumlu)
+        // transform[4] = x, transform[5] = y
+        const [vx, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
         return {
           str: item.str,
-          x: item.transform[4], // pdf x
-          y: item.transform[5], // pdf y (bottom-up)
-          w: item.width
+          x: vx, 
+          y: vy, 
+          hasEOL: item.hasEOL
         };
-      }).filter(item => item.y < limitY_Top && item.y > limitY_Bottom);
+      });
 
-      // Yukarıdan aşağı sırala (PDF Y'si büyük olan üsttedir)
-      items.sort((a, b) => b.y - a.y);
+      // 2. Kırmızı Alan Filtresi (Header/Footer)
+      const limitY_Top = g.header * h;
+      const limitY_Bottom = g.footer * h;
+      
+      items = items.filter(item => item.y > limitY_Top && item.y < limitY_Bottom);
 
+      // 3. Sıralama: Y koordinatına göre (Yukarıdan aşağıya)
+      // Satır içi sıralama için Y farkı azsa X'e bak.
+      items.sort((a, b) => {
+        if (Math.abs(a.y - b.y) < 5) return a.x - b.x; // Aynı satır
+        return a.y - b.y; // Farklı satır (Top-down)
+      });
+
+      // 4. Mod'a Göre İşle
       if (extractionMode === 'LV') {
-        extractedData.push(...processLVPage(items, width, g.cols));
+        extractedData.push(...processLVPage(items, w, g.cols));
       } else {
-        extractedData.push(...processGeneralPage(items, width, g.cols));
+        extractedData.push(...processGeneralPage(items, w, g.cols));
       }
     }
     
-    label.textContent = "Tamamlandı!";
+    pText.innerText = "İşlem Tamamlandı!";
     renderPreview(extractedData);
     document.getElementById('btnExport').disabled = false;
   }
 
-  /**
-   * LV MODE: Poz, Tanım, Miktar, Fiyat mantığı
-   */
+  // --- LV Modu Mantığı ---
   function processLVPage(items, pgWidth, colsNorm) {
     let rows = [];
     let currentRow = null;
-    
-    // Sütun pixel sınırları
-    const limits = colsNorm.map(c => c * pgWidth);
-    // [PosLimit, DescLimit, UnitLimit, QtyLimit, PriceLimit]
-    // Varsayım: 
-    // Col 0: Pos (0 -> limits[0])
-    // Col 1: Desc (limits[0] -> limits[1])
-    // Col 2: Unit ...
-    
+    const limits = colsNorm.map(c => c * pgWidth); // Pixel sınırları
+
     items.forEach(item => {
       // Hangi sütunda?
       let colIdx = 0;
@@ -412,17 +390,17 @@
         if (item.x > limits[i]) colIdx = i + 1;
       }
 
-      // Yeni Poz Başlangıcı mı? (LV Modunda Kural: İlk sütunda veri varsa yeni satırdır)
+      // Yeni Satır Tespiti: İlk sütunda (Poz No) metin varsa
       if (colIdx === 0 && item.str.trim().length > 0) {
         if (currentRow) rows.push(currentRow);
         currentRow = { pos: item.str, desc: "", unit: "", qty: "", price: "", total: "" };
       } else if (currentRow) {
-        // Mevcut satıra ekle
         const val = item.str.trim();
         if(!val) return;
         
+        // Veriyi ilgili hücreye ekle
         if (colIdx === 1) currentRow.desc += " " + val;
-        else if (colIdx === 2) currentRow.unit = val; // Genelde tek kelime
+        else if (colIdx === 2) currentRow.unit = val;
         else if (colIdx === 3) currentRow.qty = val;
         else if (colIdx === 4) currentRow.price = val;
         else if (colIdx === 5) currentRow.total = val;
@@ -432,31 +410,28 @@
     return rows;
   }
 
-  /**
-   * GENERAL MODE: Her satır yeni satır, sütunlara böl
-   */
+  // --- General Mod Mantığı ---
   function processGeneralPage(items, pgWidth, colsNorm) {
     let rows = [];
     let currentRow = [];
-    let lastY = -1;
+    let lastY = -999;
     const limits = colsNorm.map(c => c * pgWidth);
 
     items.forEach(item => {
-      // Satır Gruplama (Y mesafesi 10px'den fazlaysa yeni satır)
-      if (lastY === -1 || Math.abs(item.y - lastY) > 8) {
-        if (currentRow.length > 0) rows.push(currentRow); // Önceki satırı kaydet
-        // Yeni boş satır yarat (Sütun sayısı: guide sayısı + 1)
+      // Satır Ayrımı: Y farkı 10px'den büyükse yeni satır
+      if (Math.abs(item.y - lastY) > 10) {
+        if (currentRow.length > 0) rows.push(currentRow);
         currentRow = new Array(limits.length + 1).fill("");
         lastY = item.y;
       }
 
-      // Sütun bul
+      // Sütun Tespiti
       let colIdx = 0;
       for (let i=0; i<limits.length; i++) {
         if (item.x > limits[i]) colIdx = i + 1;
       }
       
-      currentRow[colIdx] += (currentRow[colIdx] ? " " : "") + item.str;
+      currentRow[colIdx] += (currentRow[colIdx] ? " " : "") + item.str.trim();
     });
 
     if (currentRow.length > 0) rows.push(currentRow);
@@ -464,120 +439,110 @@
   }
 
   /*******************************************************
-   * UTILS: FORMATTING & EXPORT
+   * EXCEL VE YARDIMCILAR
    *******************************************************/
-  
-  // Gelişmiş Türkçe Sayı Temizleme
-  function cleanTurkishNumber(str) {
+  function cleanNumber(str) {
     if (!str) return 0;
-    // Harfleri ve gereksiz karakterleri temizle, sadece sayı, virgül, nokta, eksi kalsın
+    // Harfleri temizle
     let clean = str.replace(/[^0-9,.-]/g, '').trim();
-    
-    // 1.250,50 -> 1250.50
+    // Türkçe format (1.250,50) -> İngilizce (1250.50)
     if (clean.includes(',') && clean.includes('.')) {
       clean = clean.replace(/\./g, '').replace(',', '.');
-    } 
-    // 1234,50 -> 1234.50
-    else if (clean.includes(',')) {
+    } else if (clean.includes(',')) {
       clean = clean.replace(',', '.');
     }
-    
-    let res = parseFloat(clean);
-    return isNaN(res) ? 0 : res;
+    return parseFloat(clean) || 0;
   }
 
   function renderPreview(data) {
     const div = document.getElementById('previewArea');
+    document.getElementById('rowCountBadge').textContent = data.length + " satır";
     div.innerHTML = "";
-    const table = document.createElement('table');
     
-    // Header
+    const table = document.createElement('table');
     const trH = document.createElement('tr');
+    
+    // Başlıklar
     if (extractionMode === 'LV') {
       ['Poz No', 'Açıklama', 'Birim', 'Miktar', 'B.Fiyat', 'Toplam'].forEach(h => {
         const th = document.createElement('th'); th.textContent = h; trH.appendChild(th);
       });
     } else {
-      // General Mode Headers (Col 1, Col 2...)
-      const colCount = data[0] ? data[0].length : 0;
+      const colCount = data[0] ? data[0].length : 5;
       for(let i=0; i<colCount; i++) {
         const th = document.createElement('th'); th.textContent = `Sütun ${i+1}`; trH.appendChild(th);
       }
     }
     table.appendChild(trH);
 
-    // Body (Limit to first 50 rows for performance)
-    data.slice(0, 50).forEach(row => {
+    // İlk 100 satır önizleme
+    data.slice(0, 100).forEach(row => {
       const tr = document.createElement('tr');
       if (extractionMode === 'LV') {
-        [row.pos, row.desc, row.unit, row.qty, row.price, row.total].forEach(cell => {
-          const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td);
+        [row.pos, row.desc, row.unit, row.qty, row.price, row.total].forEach(c => {
+          const td = document.createElement('td'); td.textContent = c; tr.appendChild(td);
         });
       } else {
-        row.forEach(cell => {
-          const td = document.createElement('td'); td.textContent = cell; tr.appendChild(td);
+        row.forEach(c => {
+          const td = document.createElement('td'); td.textContent = c; tr.appendChild(td);
         });
       }
       table.appendChild(tr);
     });
-
-    if (data.length > 50) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 6;
-      td.textContent = `... ve ${data.length - 50} satır daha ...`;
-      td.style.textAlign = 'center';
-      td.style.fontStyle = 'italic';
-      tr.appendChild(td);
-      table.appendChild(tr);
-    }
-
     div.appendChild(table);
   }
 
-  async function exportToExcel() {
-    // 1. Veriyi Hazırla
+  function exportToExcel() {
     let ws_data = [];
     
+    // Başlık ve Veri Hazırlama
     if (extractionMode === 'LV') {
       ws_data.push(['Poz No', 'Tanım', 'Birim', 'Miktar', 'Birim Fiyat', 'Toplam Fiyat']);
       extractedData.forEach(r => {
-        // Sayıları düzelt
-        const qty = cleanTurkishNumber(r.qty);
-        const prc = cleanTurkishNumber(r.price);
-        const tot = cleanTurkishNumber(r.total);
-        ws_data.push([r.pos, r.desc, r.unit, qty, prc, tot || (qty*prc)]);
+        ws_data.push([
+          r.pos, r.desc, r.unit, 
+          cleanNumber(r.qty), cleanNumber(r.price), cleanNumber(r.total)
+        ]);
       });
     } else {
-      extractedData.forEach(r => {
-        // General modda her şeyi string bırakıyoruz, ama sayıya benziyorsa çevirebiliriz
-        const cleanRow = r.map(c => {
-          // Basit bir sayı kontrolü
-          if (c.match(/^[0-9.,]+$/)) return cleanTurkishNumber(c);
-          return c;
-        });
-        ws_data.push(cleanRow);
+      extractedData.forEach(row => {
+        // Otomatik sayı dönüşümü
+        ws_data.push(row.map(c => {
+          return (c.match(/^[0-9.,]+$/) && c.length < 15) ? cleanNumber(c) : c;
+        }));
       });
     }
 
-    // 2. Excel Oluştur
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(ws_data);
     XLSX.utils.book_append_sheet(wb, ws, "Export");
     
-    // 3. Blob Oluştur
     const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
     const blob = new Blob([wbout], {type:"application/octet-stream"});
-    
-    // 4. İndir
     const url = window.URL.createObjectURL(blob);
+    
     const a = document.createElement("a");
     a.href = url;
     a.download = "LV_Export_" + new Date().toISOString().slice(0,10) + ".xlsx";
     a.click();
-
-    // 5. Cloud Backup (Opsiyonel)
+    
+    // Cloud Upload (Opsiyonel)
     if (document.getElementById('chkCloud').checked && APPS_SCRIPT_URL) {
-      uploadToCloud(blob, a.download);
-    } else if (document.getElementById('chkCloud').checked && !APPS_SCRIPT_URL) {
-      console.log("
+      sendToCloud(blob, a.download);
+    }
+  }
+
+  function sendToCloud(blob, name) {
+    const reader = new FileReader();
+    reader.readAsDataURL(blob);
+    reader.onloadend = () => {
+      const base64 = reader.result.split(',')[1];
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ name: name, data: base64, mime: 'application/xlsx' })
+      }).catch(e => console.log('Cloud log hatası (önemsiz):', e));
+    };
+  }
+</script>
+</body>
+</html>
