@@ -15,7 +15,7 @@
     .btn:disabled { opacity:.5; cursor:not-allowed; }
     input[type="file"] { padding: 6px; }
     .tiny { font-size: 12px; color: var(--muted); }
-    textarea { width:100%; height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 10px; border-radius: 10px; border:1px solid var(--border); }
+    textarea { width:100%; height: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 10px; border-radius: 10px; border:1px solid var(--border); }
     table { width:100%; border-collapse: collapse; font-size: 12px; }
     th, td { border:1px solid var(--border); padding: 6px 8px; vertical-align: top; }
     th { background:#f6f8fa; position: sticky; top: 0; z-index: 1; }
@@ -25,7 +25,7 @@
     canvas { width:100%; height:auto; display:block; }
     .overlay { position:absolute; inset:0; pointer-events:none; }
     .guide { position:absolute; top:0; bottom:0; width:2px; background: rgba(255,0,0,0.75); pointer-events:auto; cursor: ew-resize; }
-    .guideLabel { position:absolute; top:6px; transform: translateX(-50%); background: rgba(255,255,255,0.9); border:1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color:#111; pointer-events:none; }
+    .guideLabel { position:absolute; top:6px; transform: translateX(-50%); background: rgba(255,255,255,0.92); border:1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color:#111; pointer-events:none; }
     .kpi { display:flex; gap:10px; flex-wrap:wrap; }
     .pill { border:1px solid var(--border); border-radius:999px; padding:4px 8px; font-size:12px; background:#fff; }
     .warn { color:#b54708; }
@@ -117,7 +117,7 @@
     // =========================
     // Versioning
     // =========================
-    const VERSION_TAG = "20251218_1400";
+    const VERSION_TAG = "20251218_1140";
 
     // =========================
     // State
@@ -126,26 +126,13 @@
     let currentPage = 1;
     let fileMetaKey = null;
     let extractedRows = [];
-    let preset = null; // { boundariesNorm: number[] }
-    let autoModel = null; // { boundariesNorm, centers, assignmentMode }
+    let preset = null;            // { boundariesNorm: number[] }
+    let sessionGuides = null;     // { boundariesNorm: number[] } (not persisted)
+    let autoModel = null;         // { boundariesNorm, centers, assignmentMode }
 
-    // Calibration boundaries: 5 vertical boundaries splitting 6 columns
-    // [posEnd, qtyEnd, unitEnd, epEnd, gpEnd] in normalized [0..1] canvas x
+    // 6 columns split by 5 vertical boundaries:
+    // [posEnd, qtyEnd, unitEnd, epEnd, gpEnd] normalized to [0..1]
     const DEFAULT_BOUNDARIES = [0.22, 0.34, 0.44, 0.60, 0.72];
-
-    const UNIT_WORDS = new Set([
-      "m", "m2", "m3", "kg", "t", "stk", "st", "pausch", "psch", "l", "lfm",
-      "m²", "m³", "std", "h", "day", "wo", "qm", "cbm", "set", "pcs"
-    ]);
-
-    // Patterns for header/footer noise
-    const NOISE_PATTERNS = [
-      /seite\\s+\\d+\\s+von\\s+\\d+/i,
-      /übertrag/i,
-      /fortsetzung/i,
-      /summe/i,
-      /zwischensumme/i
-    ];
 
     // =========================
     // UI Helpers
@@ -153,14 +140,20 @@
     const $ = (id) => document.getElementById(id);
     function log(msg) {
       const ta = $("log");
-      ta.value += msg + "\\n";
+      ta.value += msg + "\n";
       ta.scrollTop = ta.scrollHeight;
     }
     function setKpi() {
       $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
-      const mode = (preset && preset.boundariesNorm) ? "Preset boundaries" : "Auto clustering";
-      $("kpiMode").textContent = "Mode: " + mode;
-      const b = (preset && preset.boundariesNorm) ? preset.boundariesNorm : (autoModel ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES);
+      const mode =
+        (sessionGuides && sessionGuides.boundariesNorm) ? "Mode: Session guides" :
+        (preset && preset.boundariesNorm) ? "Mode: Preset boundaries" :
+        "Mode: Auto clustering";
+      $("kpiMode").textContent = mode;
+      const b =
+        (sessionGuides && sessionGuides.boundariesNorm) ? sessionGuides.boundariesNorm :
+        (preset && preset.boundariesNorm) ? preset.boundariesNorm :
+        (autoModel ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES);
       $("kpiCols").textContent = "Boundaries: " + b.map(v => v.toFixed(2)).join(", ");
     }
     function clearTable() {
@@ -235,7 +228,7 @@
     }
 
     // =========================
-    // PDF Preview (stabilized, independent)
+    // PDF Preview (independent of extraction)
     // =========================
     async function renderCurrentPage() {
       if (!pdfDoc) return;
@@ -248,17 +241,17 @@
       canvas.height = Math.floor(viewport.height);
 
       $("previewWarn").textContent = "";
-
       const renderTask = page.render({ canvasContext: ctx, viewport });
       await renderTask.promise;
 
       $("pageInfo").textContent = `Page ${currentPage} / ${pdfDoc.numPages}`;
 
+      // Recompute auto model for this page and update guides (unless user is actively calibrating).
       try {
         const textContent = await page.getTextContent();
         autoModel = buildAutoColumnModel(textContent, viewport.width);
-        if (!preset) applyGuides(autoModel.boundariesNorm);
-        else applyGuides(preset.boundariesNorm);
+        const active = getActiveBoundariesNormForPreview();
+        applyGuides(active);
       } catch (e) {
         $("previewWarn").textContent = "Preview model warning: " + (e?.message || String(e));
       }
@@ -270,10 +263,18 @@
     // =========================
     const GUIDE_NAMES = ["Pos", "Qty", "Unit", "EP", "GP"];
     let guides = []; // {el,labelEl,idx,normX}
+
     function overlayRect() {
-      const canvas = $("pdfCanvas");
-      return canvas.getBoundingClientRect();
+      return $("pdfCanvas").getBoundingClientRect();
     }
+
+    function getActiveBoundariesNormForPreview() {
+      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) return sessionGuides.boundariesNorm;
+      if (preset && preset.boundariesNorm) return preset.boundariesNorm;
+      if (autoModel && autoModel.boundariesNorm) return autoModel.boundariesNorm;
+      return DEFAULT_BOUNDARIES;
+    }
+
     function applyGuides(boundariesNorm) {
       const overlay = $("overlay");
       overlay.innerHTML = "";
@@ -283,6 +284,7 @@
 
       boundariesNorm.forEach((nx, idx) => {
         const x = nx * w;
+
         const line = document.createElement("div");
         line.className = "guide";
         line.style.left = `${x}px`;
@@ -301,6 +303,7 @@
       setGuidesEnabled($("chkCalib").checked);
       attachGuideDrag();
     }
+
     function setGuidesEnabled(enabled) {
       for (const g of guides) {
         g.el.style.display = enabled ? "block" : "none";
@@ -308,6 +311,7 @@
       }
       $("btnSavePreset").disabled = !enabled;
     }
+
     function getBoundariesFromGuides() {
       const arr = guides.map(g => g.normX).slice();
       const clamped = arr.map(v => Math.max(0.05, Math.min(0.95, v)));
@@ -319,12 +323,14 @@
       for (let i=0;i<clamped.length;i++) clamped[i] = Math.max(0.05, Math.min(0.95, clamped[i]));
       return clamped;
     }
+
     function attachGuideDrag() {
       for (const g of guides) {
         g.el.onpointerdown = (ev) => {
           if (!$("chkCalib").checked) return;
           ev.preventDefault();
           g.el.setPointerCapture(ev.pointerId);
+
           const move = (e) => {
             const rect = overlayRect();
             const x = e.clientX - rect.left;
@@ -334,11 +340,15 @@
             g.el.style.left = `${px}px`;
             g.labelEl.style.left = `${px}px`;
           };
+
           const up = () => {
             const b = getBoundariesFromGuides();
-            if (b.length === 5) applyGuides(b);
+            // Session-only guide override (until saved)
+            sessionGuides = { boundariesNorm: b };
+            applyGuides(b);
             setKpi();
           };
+
           g.el.onpointermove = move;
           g.el.onpointerup = up;
         };
@@ -346,7 +356,7 @@
     }
 
     // =========================
-    // Auto Column Model (cluster + scoring)
+    // Auto Column Model (x clustering)
     // =========================
     function clamp01(v){ return Math.max(0, Math.min(1, v)); }
 
@@ -376,6 +386,8 @@
       }
 
       xs.sort((a,b)=>a-b);
+
+      // Greedy 1D clustering
       const clusters = [];
       const threshold = Math.max(10, pageWidthPx * 0.02);
       let cur = [xs[0]];
@@ -387,237 +399,552 @@
 
       const centers = clusters.map(c => c.reduce((a,b)=>a+b,0)/c.length).sort((a,b)=>a-b);
 
+      // Keep densest clusters
       let keep = clusters.map((c, idx)=>({ idx, count:c.length, center: centers[idx] }));
       keep.sort((a,b)=>b.count-a.count);
       keep = keep.slice(0, Math.min(10, keep.length));
       keep.sort((a,b)=>a.center-b.center);
       const keptCenters = keep.map(k=>k.center);
 
+      // Quantile cuts snapped to gaps
       const q = (p) => xs[Math.floor((xs.length-1)*p)];
-      const quant = [q(0.20), q(0.33), q(0.45), q(0.62), q(0.75)];
+      const quant = [q(0.18), q(0.32), q(0.44), q(0.62), q(0.78)];
       const boundariesPx = quant.map(v => snapToGap(v, keptCenters, pageWidthPx));
       const boundariesNorm = boundariesPx.map(v => clamp01(v / Math.max(1, pageWidthPx)));
+
+      // Enforce ordering and minimum gaps
+      boundariesNorm.sort((a,b)=>a-b);
+      const minGap = 0.03;
+      for (let i=1;i<boundariesNorm.length;i++) {
+        if (boundariesNorm[i] - boundariesNorm[i-1] < minGap) boundariesNorm[i] = boundariesNorm[i-1] + minGap;
+      }
+      for (let i=0;i<boundariesNorm.length;i++) boundariesNorm[i] = clamp01(boundariesNorm[i]);
 
       return { boundariesNorm, centers: keptCenters, assignmentMode: "auto" };
     }
 
     // =========================
-    // Parsing helpers
+    // Parsing primitives (token-based, robust)
     // =========================
-    function normalizeNumber(s) {
-      const t = s.replace(/\\s+/g,"").replace(/\\./g,"").replace(/,/g,".");
+    function escapeRegex(s) {
+      return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function normalizeSpaces(s) {
+      return (s || "").replace(/\s+/g, " ").trim();
+    }
+
+    function stripOuterPunct(token) {
+      let t = (token || "").trim();
+      // Remove leading/trailing punctuation but keep dots inside codes.
+      t = t.replace(/^[\(\[\{<]+/, "").replace(/[\)\]\}>]+$/, "");
+      t = t.replace(/^[,:;]+/, "").replace(/[,:;]+$/, "");
       return t;
     }
-    function isPriceToken(s) {
-      const t = s.replace(/\\s+/g,"");
-      if (!t) return false;
-      return /^(\\d{1,3}(\\.\\d{3})*|\\d+)([.,]\\d{2})$/.test(t) || /^(\\d+)([.,]\\d{2})$/.test(t);
-    }
-    function isQtyToken(s) {
-      const t = s.replace(/\\s+/g,"");
-      if (!t) return false;
-      if (/^\\d+$/.test(t)) return true;
-      if (/^\\d+[.,]\\d{1,3}$/.test(t)) return true;
-      return false;
-    }
-    function isUnitToken(s) {
-      const t = s.trim();
-      if (!t) return false;
-      return UNIT_WORDS.has(t.toLowerCase());
-    }
-    function isPosToken(s) {
-      const t = s.trim();
-      if (!t) return false;
-      if (/^\\d+(\\.\\d+)+$/.test(t)) return true;
-      if (/^\\d{1,6}$/.test(t)) return true;
-      if (/^[A-Z]\\d{1,3}([.-]\\d{1,4})+$/i.test(t)) return true;
-      return false;
-    }
-    function isTitleCode(t) {
+
+    function isDottedNumericCode(t) {
       const s = t.trim();
-      if (!/^\\d+(\\.\\d+)+$/.test(s)) return false;
-      return !/\\.\\d{4}$/.test(s);
+      return /^\d+(?:\.\d+)+$/.test(s);
     }
-    function isNoiseLine(lineText) {
-      const t = lineText.trim();
-      if (!t) return true;
-      for (const re of NOISE_PATTERNS) if (re.test(t)) return true;
+
+    function endsWithFourDigits(code) {
+      return /\.\d{4}$/.test(code);
+    }
+
+    function isPosToken(token) {
+      const t = token.trim();
+      if (!t) return false;
+      if (isDottedNumericCode(t)) return true;
+      if (/^\d{1,6}$/.test(t)) return true;
+      if (/^[A-Z]\d{1,3}(?:[.-]\d{1,4})+$/i.test(t)) return true;
       return false;
     }
 
-    // =========================
-    // Extraction core
-    // =========================
-    function assignRoleByBoundaries(xMid, boundariesPx) {
-      if (xMid < boundariesPx[0]) return 0; // pos
-      if (xMid < boundariesPx[1]) return 1; // qty
-      if (xMid < boundariesPx[2]) return 2; // unit
-      if (xMid < boundariesPx[3]) return 3; // ep
-      if (xMid < boundariesPx[4]) return 4; // gp
-      return 5; // desc
+    function isTitleCode(code) {
+      // Title/Section rule: dotted numeric code but NOT ending with 4 digits
+      if (!isDottedNumericCode(code)) return false;
+      return !endsWithFourDigits(code);
     }
 
-    function groupItemsIntoLines(items) {
-      const enriched = [];
-      for (const it of items) {
-        const s = (it.str || "");
-        if (!s.trim()) continue;
-        const x = it.transform[4];
-        const y = it.transform[5];
-        const w = it.width || 0;
-        enriched.push({ s, x, y, w, xMid: x + w*0.5 });
+    function parseMoneyToken(token) {
+      // Accept 2-3 decimals, optional currency symbol, thousands separators.
+      if (!token) return null;
+      let t = token.replace(/\s+/g, "");
+      // Remove common currency marks without hardcoding any language words.
+      t = t.replace(/[€$£]/g, "");
+      // Must contain digits
+      if (!/\d/.test(t)) return null;
+
+      // If both dot and comma exist: assume dot thousands, comma decimal.
+      if (t.includes(".") && t.includes(",")) {
+        t = t.replace(/\./g, "");
+        // Keep last comma as decimal separator.
+        const m = t.match(/^(\d+),(\d{2,3})$/);
+        if (!m) return null;
+        return m[1] + "." + m[2];
       }
-      enriched.sort((a,b)=> b.y - a.y || a.x - b.x);
-      const lines = [];
-      const tol = 2.5;
-      for (const e of enriched) {
-        const last = lines[lines.length-1];
-        if (!last || Math.abs(last.y - e.y) > tol) lines.push({ y: e.y, items: [e] });
-        else last.items.push(e);
+
+      // Comma decimal
+      if (t.includes(",")) {
+        // Remove thousands dots just in case (rare in this branch)
+        t = t.replace(/\./g, "");
+        const m = t.match(/^(\d+),(\d{2,3})$/);
+        if (!m) return null;
+        return m[1] + "." + m[2];
       }
-      for (const ln of lines) ln.items.sort((a,b)=>a.x-b.x);
-      return lines;
-    }
 
-    function scoreLine(line, boundariesPx) {
-      const regions = [[],[],[],[],[],[]];
-      for (const it of line.items) {
-        const r = assignRoleByBoundaries(it.xMid, boundariesPx);
-        regions[r].push(it.s.trim());
-      }
-      const posText = regions[0].join(" ").trim();
-      const qtyText = regions[1].join(" ").trim();
-      const unitText = regions[2].join(" ").trim();
-      const epText  = regions[3].join(" ").trim();
-      const gpText  = regions[4].join(" ").trim();
-      const descText = regions[5].join(" ").trim();
+      // Dot decimal
+      const m = t.match(/^(\d+)\.(\d{2,3})$/);
+      if (m) return m[1] + "." + m[2];
 
-      const posLike = isPosToken(posText);
-      const titleLike = isTitleCode(posText);
-      const qtyLike = isQtyToken(qtyText) || isQtyToken(descText);
-      const unitLike = isUnitToken(unitText);
-      const epLike = isPriceToken(epText);
-      const gpLike = isPriceToken(gpText);
-
-      const labelLike =
-        /^(zweck|vorleistung|folge(?:leistung)?|abdichtung|anforderung|auflagerfläche|wanddicke)\\s*:/i.test(descText);
-
-      return { regions, posText, qtyText, unitText, epText, gpText, descText, posLike, titleLike, qtyLike, unitLike, epLike, gpLike, labelLike };
-    }
-
-    function isNewPositionLine(sig) {
-      const posEnds4 = /\\.\\d{4}$/.test(sig.posText.trim());
-      if (sig.posLike && !sig.titleLike) {
-        if (sig.qtyLike || sig.epLike || sig.gpLike) return true;
-        if (posEnds4) return true;
-      }
-      return false;
-    }
-    function isTitleLine(sig) {
-      return sig.titleLike && !sig.qtyLike && !sig.epLike && !sig.gpLike;
-    }
-    function cleanDescLine(t) {
-      return t.replace(/[ \\t]+/g, " ").trim();
-    }
-    function flushOpen(openPos, rowsOut) {
-      if (!openPos) return null;
-      const desc = openPos.descLines.filter(Boolean).join("\\n").trim();
-      rowsOut.push({
-        "Seite": openPos.pageStart ?? "",
-        "Pos": openPos.pos ?? "",
-        "Menge": openPos.qty ?? "",
-        "Menge Einheit": openPos.unit ?? "",
-        "EP": openPos.ep ?? "",
-        "GP": openPos.gp ?? "",
-        "Beschreibung": desc
-      });
+      // Integer is not money here
       return null;
     }
 
-    async function extractAllPages() {
-      if (!pdfDoc) return;
-      extractedRows = [];
-      clearTable();
-      log("Extract started...");
+    function isQtyToken(token) {
+      // Quantity can be integer or 1-3 decimals (including 2 decimals).
+      if (!token) return false;
+      const t = token.replace(/\s+/g, "");
+      if (/^\d+$/.test(t)) return true;
+      if (/^\d+[.,]\d{1,3}$/.test(t)) return true;
+      return false;
+    }
 
-      let openPos = null;
+    function isLikelyUnitToken(token) {
+      // Unit: short non-numeric token, mostly letters/symbols, in the Unit column.
+      if (!token) return false;
+      const t = stripOuterPunct(token);
+      if (!t) return false;
+      if (/\d/.test(t)) {
+        // Allow units like m2, m3, m², m³, kg, etc.
+        if (/^(m2|m3|m²|m³|cm|mm|m|kg|t|h|l)$/i.test(t)) return true;
+        return false;
+      }
+      if (/^(m2|m3|m²|m³|cm|mm|m|kg|t|h|l)$/i.test(t)) return true;
+      // Generic short unit token: letters (unicode) or micro sign and superscripts
+      try {
+        if (/^[\p{L}µ²³\/]{1,10}$/u.test(t)) return true;
+      } catch (_) {
+        // Fallback without unicode properties
+        if (/^[A-Za-zµ²³\/]{1,10}$/.test(t)) return true;
+      }
+      return false;
+    }
 
-      for (let p = 1; p <= pdfDoc.numPages; p++) {
-        const page = await pdfDoc.getPage(p);
+    function removeTokenOnceByWhitespaceBoundary(text, token) {
+      if (!text || !token) return text;
+      const re = new RegExp("(^|\\s)" + escapeRegex(token) + "(?=\\s|$)");
+      return text.replace(re, "$1").replace(/\s+/g, " ").trim();
+    }
+
+    function dotRatio(text) {
+      if (!text) return 0;
+      const dots = (text.match(/\./g) || []).length;
+      return dots / Math.max(1, text.length);
+    }
+
+    function isLeaderLine(text) {
+      // Mostly dots (leaders) with minimal payload
+      const t = normalizeSpaces(text);
+      if (!t) return true;
+      if (dotRatio(t) > 0.25 && t.length > 10) return true;
+      return false;
+    }
+
+    // =========================
+    // Line building
+    // =========================
+    function median(arr) {
+      if (!arr.length) return 0;
+      const s = arr.slice().sort((a,b)=>a-b);
+      const m = Math.floor(s.length/2);
+      return s.length % 2 ? s[m] : (s[m-1]+s[m])/2;
+    }
+
+    function groupItemsIntoLines(items, pageHeight) {
+      const enriched = [];
+      const heights = [];
+
+      for (const it of items) {
+        const str = (it.str || "");
+        if (!str.trim()) continue;
+        const x = it.transform[4];
+        const y = it.transform[5];
+        const w = it.width || 0;
+        // Approx font height from transform[3] if available.
+        const h = Math.abs(it.transform[3] || it.height || 0);
+        if (h > 1 && h < 60) heights.push(h);
+        enriched.push({ str, x, y, w, xMid: x + w*0.5, h });
+      }
+
+      enriched.sort((a,b)=> b.y - a.y || a.x - b.x);
+
+      const medH = median(heights) || 10;
+      const yTol = Math.max(2.5, Math.min(10, medH * 0.35));
+
+      const lines = [];
+      for (const e of enriched) {
+        const last = lines[lines.length-1];
+        if (!last || Math.abs(last.y - e.y) > yTol) {
+          lines.push({ y: e.y, yNorm: pageHeight ? (e.y / pageHeight) : 0, items: [e] });
+        } else {
+          last.items.push(e);
+        }
+      }
+      for (const ln of lines) ln.items.sort((a,b)=>a.x-b.x);
+      return { lines, yTol, medH };
+    }
+
+    // =========================
+    // Column assignment
+    // =========================
+    function boundariesPx(boundariesNorm, pageWidth) {
+      return boundariesNorm.map(v => v * pageWidth);
+    }
+
+    function regionIndexForX(xMid, bPx) {
+      // 6 regions: 0=pos,1=qty,2=unit,3=ep,4=gp,5=desc
+      if (xMid < bPx[0]) return 0;
+      if (xMid < bPx[1]) return 1;
+      if (xMid < bPx[2]) return 2;
+      if (xMid < bPx[3]) return 3;
+      if (xMid < bPx[4]) return 4;
+      return 5;
+    }
+
+    function splitToTokensPreserve(str) {
+      return normalizeSpaces(str).split(" ").filter(Boolean);
+    }
+
+    function lineRegions(line, bPx) {
+      const regions = [[],[],[],[],[],[]];
+      for (const it of line.items) {
+        const r = regionIndexForX(it.xMid, bPx);
+        regions[r].push(it);
+      }
+      return regions;
+    }
+
+    function findPosCandidate(line, bPx, pageWidth) {
+      // Search in first two regions, token-based (robust against boundary drift).
+      const regions = lineRegions(line, bPx);
+      const candidates = [];
+
+      function pushFromItems(items) {
+        for (const it of items) {
+          const toks = splitToTokensPreserve(it.str);
+          for (const raw of toks) {
+            const tok = stripOuterPunct(raw);
+            if (!tok) continue;
+            if (!isPosToken(tok)) continue;
+            // Score: prefer dotted codes ending with 4 digits, and leftmost items.
+            let score = 0;
+            if (isDottedNumericCode(tok) && endsWithFourDigits(tok)) score += 100;
+            else if (isDottedNumericCode(tok)) score += 70;
+            else if (/^\d{1,6}$/.test(tok)) score += 50;
+            else score += 40;
+            // Left bias
+            score += Math.max(0, 30 - (it.x / Math.max(1, pageWidth)) * 30);
+            candidates.push({ tok, score, x: it.x });
+          }
+        }
+      }
+
+      pushFromItems(regions[0]);
+      pushFromItems(regions[1]);
+
+      if (candidates.length === 0) {
+        // Fallback: scan first few leftmost items on the line (layout-agnostic).
+        const leftMost = line.items.slice(0, Math.min(6, line.items.length));
+        pushFromItems(leftMost);
+      }
+
+      if (candidates.length === 0) return null;
+
+      candidates.sort((a,b)=> b.score - a.score || a.x - b.x);
+      return candidates[0].tok;
+    }
+
+    function findQtyToken(regions) {
+      const items = regions[1] || [];
+      for (const it of items) {
+        for (const raw of splitToTokensPreserve(it.str)) {
+          const tok = stripOuterPunct(raw);
+          if (!tok) continue;
+          if (isQtyToken(tok)) return tok;
+        }
+      }
+      return "";
+    }
+
+    function findUnitToken(regions) {
+      const items = regions[2] || [];
+      for (const it of items) {
+        for (const raw of splitToTokensPreserve(it.str)) {
+          const tok = stripOuterPunct(raw);
+          if (!tok) continue;
+          if (isLikelyUnitToken(tok)) return tok;
+        }
+      }
+      return "";
+    }
+
+    function findMoneyInRegion(items) {
+      for (const it of (items || [])) {
+        for (const raw of splitToTokensPreserve(it.str)) {
+          const tok = stripOuterPunct(raw);
+          const m = parseMoneyToken(tok);
+          if (m) return { raw: tok, norm: m };
+        }
+      }
+      return null;
+    }
+
+    function findMoneyByLabel(lineText, label) {
+      // Label-driven search (EP/GP). No language dependency.
+      const t = normalizeSpaces(lineText);
+      if (!t) return null;
+      // If label occurs, look for the first money-like token after it.
+      const idx = t.indexOf(label);
+      if (idx < 0) return null;
+      const after = t.slice(idx + label.length);
+      const parts = after.split(" ").filter(Boolean);
+      for (const p of parts) {
+        const m = parseMoneyToken(stripOuterPunct(p));
+        if (m) return m;
+      }
+      return null;
+    }
+
+    // =========================
+    // Noise filtering (language-agnostic, repetition-based)
+    // =========================
+    async function buildNoiseSet(doc) {
+      const occurrences = new Map(); // key -> count
+      const topThresh = 0.82;
+      const bottomThresh = 0.10;
+
+      for (let p=1; p<=doc.numPages; p++) {
+        const page = await doc.getPage(p);
         const viewport = page.getViewport({ scale: 1.0 });
         const textContent = await page.getTextContent();
-
-        const pageModel = buildAutoColumnModel(textContent, viewport.width);
-        const activeBoundariesNorm =
-          (preset && preset.boundariesNorm) ? preset.boundariesNorm : pageModel.boundariesNorm;
-        const boundariesPx = activeBoundariesNorm.map(v => v * viewport.width);
-
-        const lines = groupItemsIntoLines(textContent.items || []);
+        const { lines } = groupItemsIntoLines(textContent.items || [], viewport.height);
 
         for (const ln of lines) {
-          const fullLineText = ln.items.map(x => x.s).join(" ").replace(/\\s+/g," ").trim();
-          if (isNoiseLine(fullLineText)) continue;
+          const yNorm = ln.y / Math.max(1, viewport.height);
+          if (!(yNorm >= topThresh || yNorm <= bottomThresh)) continue;
+          const raw = ln.items.map(x => x.str).join(" ");
+          const key = normalizeSpaces(raw).toLowerCase();
+          if (!key) continue;
+          // Skip extremely long blocks
+          if (key.length > 140) continue;
+          occurrences.set(key, (occurrences.get(key) || 0) + 1);
+        }
+      }
 
-          const sig = scoreLine(ln, boundariesPx);
+      const noise = new Set();
+      for (const [k, c] of occurrences.entries()) {
+        if (c >= 2) noise.add(k);
+      }
+      return noise;
+    }
 
-          if (isTitleLine(sig)) {
-            if (openPos && openPos.descLines.length > 0) openPos = flushOpen(openPos, extractedRows);
-            extractedRows.push({
-              "Seite": "",
-              "Pos": sig.posText.trim(),
-              "Menge": "",
-              "Menge Einheit": "",
-              "EP": "",
-              "GP": "",
-              "Beschreibung": cleanDescLine(sig.descText || fullLineText.replace(sig.posText, ""))
-            });
-            continue;
-          }
+    // =========================
+    // Extraction core (with fail-safe fallback)
+    // =========================
+    function getPrimaryExtractionMode() {
+      // Priority: session guides (when checkbox is on) > preset > auto
+      if ($("chkCalib").checked && sessionGuides && sessionGuides.boundariesNorm) return { type: "session", boundariesNorm: sessionGuides.boundariesNorm };
+      if (preset && preset.boundariesNorm) return { type: "preset", boundariesNorm: preset.boundariesNorm };
+      return { type: "auto", boundariesNorm: null };
+    }
 
-          if (isNewPositionLine(sig)) {
-            openPos = flushOpen(openPos, extractedRows);
-            openPos = { pageStart: p, pos: sig.posText.trim(), qty: "", unit: "", ep: "", gp: "", descLines: [] };
+    function makeRow(seite, pos, qty, unit, ep, gp, desc) {
+      return {
+        "Seite": seite ?? "",
+        "Pos": pos ?? "",
+        "Menge": qty ?? "",
+        "Menge Einheit": unit ?? "",
+        "EP": ep ?? "",
+        "GP": gp ?? "",
+        "Beschreibung": desc ?? ""
+      };
+    }
 
-            if (isQtyToken(sig.qtyText)) openPos.qty = sig.qtyText.replace(/\\s+/g,"").trim();
-            else if (isQtyToken(sig.descText) && !sig.labelLike) openPos.qty = sig.descText.replace(/\\s+/g,"").trim();
+    function flushOpenPosition(openPos, rowsOut) {
+      if (!openPos) return null;
+      const desc = openPos.descLines.filter(Boolean).join("\n").trim();
+      rowsOut.push(makeRow(openPos.pageStart ?? "", openPos.pos ?? "", openPos.qty ?? "", openPos.unit ?? "", openPos.ep ?? "", openPos.gp ?? "", desc));
+      return null;
+    }
 
-            if (isUnitToken(sig.unitText)) openPos.unit = sig.unitText.trim();
-            if (isPriceToken(sig.epText)) openPos.ep = normalizeNumber(sig.epText.trim());
-            if (isPriceToken(sig.gpText)) openPos.gp = normalizeNumber(sig.gpText.trim());
+    function isMeaningfulTextForDesc(text) {
+      const t = normalizeSpaces(text);
+      if (!t) return false;
+      // Ignore heavy leader-only lines
+      if (isLeaderLine(t) && !/[A-Za-z]/.test(t)) return false;
+      // Ignore very short pure punctuation
+      if (/^[\.\-_:;]+$/.test(t)) return false;
+      return true;
+    }
 
-            const descCandidate = (sig.descText || "").trim();
-            if (descCandidate) openPos.descLines.push(cleanDescLine(descCandidate));
-            continue;
-          }
+    function lineToText(line) {
+      return normalizeSpaces(line.items.map(x => x.str).join(" "));
+    }
 
-          if (openPos) {
-            const maybeQty = sig.qtyText || sig.posText;
-            const maybeUnit = sig.unitText || sig.qtyText;
+    function extractFromDocWithMode(mode, noiseSet) {
+      // mode: { type: "session"|"preset"|"auto"|"forceAuto", boundariesNorm: number[]|null }
+      const rows = [];
+      let openPos = null;
 
-            if (!openPos.qty && isQtyToken(maybeQty) && !sig.labelLike) openPos.qty = maybeQty.replace(/\\s+/g,"").trim();
-            if (!openPos.unit && isUnitToken(maybeUnit)) openPos.unit = maybeUnit.trim();
+      // This function is called from an async loop, but kept sync for clarity.
+      // It relies on the caller to supply per-page lines and page models.
+      function processPage(p, viewport, textContent, pageModel) {
+        const activeBoundariesNorm =
+          (mode.type === "session" || mode.type === "preset") ? mode.boundariesNorm :
+          pageModel.boundariesNorm;
 
-            if (!openPos.ep && (isPriceToken(sig.epText) || isPriceToken(sig.descText))) {
-              const token = isPriceToken(sig.epText) ? sig.epText : sig.descText;
-              openPos.ep = normalizeNumber(token.trim());
+        const bPx = boundariesPx(activeBoundariesNorm, viewport.width);
+
+        const grouped = groupItemsIntoLines(textContent.items || [], viewport.height);
+        const lines = grouped.lines;
+
+        for (const ln of lines) {
+          const raw = ln.items.map(x => x.str).join(" ");
+          const key = normalizeSpaces(raw).toLowerCase();
+          if (noiseSet && noiseSet.has(key)) continue;
+
+          const fullText = normalizeSpaces(raw);
+          if (!fullText) continue;
+
+          // Regions for field extraction
+          const regions = lineRegions(ln, bPx);
+
+          // Token-based pos detection (robust)
+          const posTok = findPosCandidate(ln, bPx, viewport.width);
+
+          // Detect qty/unit/price signals (used for override decisions)
+          const qtyTok = findQtyToken(regions);
+          const unitTok = findUnitToken(regions);
+          const epInCol = findMoneyInRegion(regions[3]);
+          const gpInCol = findMoneyInRegion(regions[4]);
+
+          const epByLabel = findMoneyByLabel(fullText, "EP");
+          const gpByLabel = findMoneyByLabel(fullText, "GP");
+
+          const hasQtyOrPriceSignal = Boolean(qtyTok || unitTok || epInCol || gpInCol || epByLabel || gpByLabel);
+
+          if (posTok) {
+            const titleLike = isTitleCode(posTok);
+            const posLikeStrong = isDottedNumericCode(posTok) && endsWithFourDigits(posTok);
+            const posLike = !titleLike || (titleLike && hasQtyOrPriceSignal); // override: short dotted + qty/price => position
+
+            if (posLikeStrong || posLike) {
+              // Start a new position OR a title row depending on titleLike and override.
+              if (titleLike && !hasQtyOrPriceSignal) {
+                // Title/Section row (only Pos and Beschreibung filled)
+                openPos = flushOpenPosition(openPos, rows);
+                let descLine = fullText;
+                descLine = removeTokenOnceByWhitespaceBoundary(descLine, posTok);
+                rows.push(makeRow("", posTok, "", "", "", "", descLine));
+                continue;
+              }
+
+              // New position row
+              openPos = flushOpenPosition(openPos, rows);
+              openPos = { pageStart: p, pos: posTok, qty: "", unit: "", ep: "", gp: "", descLines: [] };
+
+              // Set fields from this line if present
+              if (qtyTok) openPos.qty = qtyTok.replace(/\s+/g,"").trim();
+              if (unitTok) openPos.unit = unitTok.trim();
+
+              const epNorm = epInCol ? epInCol.norm : (epByLabel || "");
+              const gpNorm = gpInCol ? gpInCol.norm : (gpByLabel || "");
+              if (epNorm) openPos.ep = epNorm;
+              if (gpNorm) openPos.gp = gpNorm;
+
+              // Description line: remove field tokens from the full line text
+              let descLine = fullText;
+              descLine = removeTokenOnceByWhitespaceBoundary(descLine, posTok);
+              if (qtyTok) descLine = removeTokenOnceByWhitespaceBoundary(descLine, qtyTok);
+              if (unitTok) descLine = removeTokenOnceByWhitespaceBoundary(descLine, unitTok);
+              if (epInCol && epInCol.raw) descLine = removeTokenOnceByWhitespaceBoundary(descLine, epInCol.raw);
+              if (gpInCol && gpInCol.raw) descLine = removeTokenOnceByWhitespaceBoundary(descLine, gpInCol.raw);
+
+              // Do not drop embedded patterns like "20cm" (removal uses whitespace boundaries)
+              if (isMeaningfulTextForDesc(descLine)) openPos.descLines.push(descLine);
+              continue;
             }
-            if (!openPos.gp && isPriceToken(sig.gpText)) openPos.gp = normalizeNumber(sig.gpText.trim());
+          }
 
-            const descLine = (sig.descText || fullLineText).trim();
-            const cleaned = cleanDescLine(descLine);
-            if (cleaned && !isNoiseLine(cleaned)) {
-              const leaderOnly = /^((m\\s+EP|EP|GP)\\s*[.\\s]*\\d*[.,]?\\d*)$/i.test(cleaned);
-              if (!leaderOnly) openPos.descLines.push(cleaned);
+          // Continuation lines
+          if (openPos) {
+            // Fill missing qty/unit
+            if (!openPos.qty) {
+              if (qtyTok) openPos.qty = qtyTok.replace(/\s+/g,"").trim();
+            }
+            if (!openPos.unit) {
+              if (unitTok) openPos.unit = unitTok.trim();
+            }
+
+            // Fill EP/GP
+            if (!openPos.ep) {
+              const epNorm = epInCol ? epInCol.norm : (epByLabel || "");
+              if (epNorm) openPos.ep = epNorm;
+            }
+            if (!openPos.gp) {
+              const gpNorm = gpInCol ? gpInCol.norm : (gpByLabel || "");
+              if (gpNorm) openPos.gp = gpNorm;
+            }
+
+            // Append description unless it's a pure leader line
+            // Keep single-word lines (requirement)
+            if (isMeaningfulTextForDesc(fullText)) {
+              // If line is mostly leaders and was only used to capture price, skip adding to description.
+              const usedForMoneyOnly = (isLeaderLine(fullText) && (epByLabel || gpByLabel || epInCol || gpInCol));
+              if (!usedForMoneyOnly) openPos.descLines.push(fullText);
             }
           }
         }
       }
 
-      openPos = flushOpen(openPos, extractedRows);
+      return { rows, processPage, flush: () => { openPos = flushOpenPosition(openPos, rows); return rows; } };
+    }
 
-      log("Extract done. Rows: " + extractedRows.length);
-      renderTable(extractedRows);
-      $("btnExport").disabled = extractedRows.length === 0;
+    async function extractAllPagesWithFailSafe() {
+      if (!pdfDoc) return [];
+
+      const noiseSet = await buildNoiseSet(pdfDoc);
+      log("Noise filter built. Entries: " + noiseSet.size);
+
+      const primary = getPrimaryExtractionMode();
+      const runOnce = async (mode, label) => {
+        log("Extraction run: " + label);
+        const ctx = extractFromDocWithMode(mode, noiseSet);
+
+        for (let p=1; p<=pdfDoc.numPages; p++) {
+          const page = await pdfDoc.getPage(p);
+          const viewport = page.getViewport({ scale: 1.0 });
+          const textContent = await page.getTextContent();
+          const pageModel = buildAutoColumnModel(textContent, viewport.width);
+          ctx.processPage(p, viewport, textContent, pageModel);
+        }
+        return ctx.flush();
+      };
+
+      // 1) Primary run (session guides / preset / auto)
+      let rows = await runOnce(
+        primary.type === "auto" ? { type:"auto", boundariesNorm:null } : primary,
+        primary.type === "auto" ? "auto clustering" : primary.type
+      );
+
+      // 2) Fail-safe: if rows == 0, retry with forced auto clustering (ignore preset/guides)
+      if (rows.length === 0) {
+        log("Zero rows detected. Retrying with auto clustering (ignoring preset/guides)...");
+        rows = await runOnce({ type:"auto", boundariesNorm:null }, "auto clustering (fail-safe)");
+      }
+
+      return rows;
     }
 
     // =========================
@@ -639,18 +966,24 @@
     // Wire up UI
     // =========================
     (function init() {
+      $("kpiVersion").textContent = "VERSION_TAG=" + VERSION_TAG;
+      $("kpiMode").textContent = "Mode: -";
+      $("kpiCols").textContent = "Boundaries: -";
       log("Ready. VERSION_TAG=" + VERSION_TAG);
-      setKpi();
 
       $("fileInput").addEventListener("change", () => {
         const f = $("fileInput").files?.[0] || null;
         $("btnLoad").disabled = !f;
         $("btnExtract").disabled = true;
         $("btnExport").disabled = true;
+
         pdfDoc = null;
         currentPage = 1;
         extractedRows = [];
+        preset = null;
+        sessionGuides = null;
         clearTable();
+
         if (f) {
           fileMetaKey = makeFileKey(f);
           preset = loadPresetForFile();
@@ -668,11 +1001,16 @@
           const loadingTask = pdfjsLib.getDocument({ data: buf });
           pdfDoc = await loadingTask.promise;
           currentPage = 1;
+
           log("PDF loaded. Pages: " + pdfDoc.numPages);
+
           $("btnPrev").disabled = false;
           $("btnNext").disabled = false;
           $("btnExtract").disabled = false;
+
+          // Render preview immediately
           await renderCurrentPage();
+
           updatePresetUI();
           setKpi();
         } catch (e) {
@@ -685,6 +1023,7 @@
         currentPage = Math.max(1, currentPage - 1);
         await renderCurrentPage();
       });
+
       $("btnNext").addEventListener("click", async () => {
         if (!pdfDoc) return;
         currentPage = Math.min(pdfDoc.numPages, currentPage + 1);
@@ -692,40 +1031,61 @@
       });
 
       $("chkCalib").addEventListener("change", () => {
-        setGuidesEnabled($("chkCalib").checked);
-        updatePresetUI();
-        if ($("chkCalib").checked) {
+        const enabled = $("chkCalib").checked;
+        setGuidesEnabled(enabled);
+
+        if (enabled) {
+          // Initialize session guides from preset or auto/default
           const b = (preset && preset.boundariesNorm) ? preset.boundariesNorm
                   : (autoModel && autoModel.boundariesNorm) ? autoModel.boundariesNorm
                   : DEFAULT_BOUNDARIES;
-          applyGuides(b);
+          sessionGuides = { boundariesNorm: b.slice() };
+          applyGuides(sessionGuides.boundariesNorm);
+        } else {
+          sessionGuides = null;
+          applyGuides(getActiveBoundariesNormForPreview());
         }
+
+        updatePresetUI();
         setKpi();
       });
 
       $("btnSavePreset").addEventListener("click", () => {
         if (!$("chkCalib").checked) return;
         const b = getBoundariesFromGuides();
+        // Save preset; keep session guides active as well.
         savePresetForFile(b);
+        sessionGuides = { boundariesNorm: b.slice() };
+        applyGuides(b);
+        setKpi();
       });
+
       $("btnClearPreset").addEventListener("click", () => {
         clearPresetForFile();
-        const b = (autoModel && autoModel.boundariesNorm) ? autoModel.boundariesNorm : DEFAULT_BOUNDARIES;
+        // Do not touch session guides unless calibration is off
+        if (!$("chkCalib").checked) sessionGuides = null;
+        const b = getActiveBoundariesNormForPreview();
         applyGuides(b);
+        setKpi();
       });
 
       $("btnExtract").addEventListener("click", async () => {
         if (!pdfDoc) return;
-        if ($("chkCalib").checked && guides.length === 5) {
-          const b = getBoundariesFromGuides();
-          preset = { boundariesNorm: b }; // session-only unless saved
-          log("Calibration active: using current guides for extraction.");
-        } else {
-          preset = loadPresetForFile();
-        }
+        $("btnExport").disabled = true;
+        extractedRows = [];
+        clearTable();
+
+        // Refresh preset from storage (in case file key changed)
+        preset = loadPresetForFile();
+
         setKpi();
+        log("Extract started...");
+
         try {
-          await extractAllPages();
+          extractedRows = await extractAllPagesWithFailSafe();
+          log("Extract done. Rows: " + extractedRows.length);
+          renderTable(extractedRows);
+          $("btnExport").disabled = extractedRows.length === 0;
         } catch (e) {
           log("ERROR extracting: " + (e?.message || String(e)));
         }
@@ -733,6 +1093,7 @@
 
       $("btnExport").addEventListener("click", exportXlsx);
 
+      // Initial guides (hidden until enabled)
       applyGuides(DEFAULT_BOUNDARIES);
       setGuidesEnabled(false);
       updatePresetUI();
