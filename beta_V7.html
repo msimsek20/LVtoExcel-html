@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LVtoExcel Pro V7.0 - Ultimate Flexible</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    :root { --primary: #0969da; --border:#d0d7de; --bg:#f6f8fa; --white:#ffffff; --danger:#cf222e; --success:#2da44e; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background:var(--bg); }
+    .navbar { background: #24292f; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+    .container { max-width: 1500px; margin: 20px auto; padding: 0 20px; display: flex; flex-direction: column; gap: 15px; }
+    .card { background: var(--white); border: 1px solid var(--border); border-radius: 8px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    
+    .btn { padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; border: 1px solid rgba(27,31,36,0.15); }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-danger { background: #fff; color: var(--danger); border-color: var(--danger); }
+
+    #viewer-container { position: relative; background: #525659; padding: 50px 20px; border-radius: 8px; overflow: auto; display: flex; justify-content: center; }
+    #canvas-wrapper { position: relative; }
+    canvas { display: block; box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+    .guide-layer { position: absolute; top: 0; left: 0; cursor: crosshair; z-index: 10; }
+
+    /* Column Header Controls */
+    #header-overlay { position: absolute; top: -45px; left: 0; width: 100%; height: 45px; pointer-events: none; z-index: 20; }
+    .col-box { 
+        position: absolute; height: 42px; background: rgba(255,255,255,0.98); border: 1px solid #999; 
+        border-bottom: 3px solid var(--primary); pointer-events: auto; padding: 2px; font-size: 10px; box-sizing: border-box;
+    }
+    .col-box.master { border-bottom-color: var(--success); background: #f0fff4; }
+    .col-box input { width: 100%; border: none; border-bottom: 1px solid #eee; font-size: 10px; font-weight: bold; margin-bottom: 2px; }
+    .col-box select { width: 100%; font-size: 9px; height: 16px; }
+
+    .range-input { width: 50px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+    th { background: #f6f8fa; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar">
+  <div style="font-weight: bold;">LVtoExcel Pro <span style="color:var(--success)">V7.0 (Flexible)</span></div>
+  <div class="toolbar">
+    <select id="langSelect" onchange="updateLocale()">
+      <option value="de">Deutsch</option>
+      <option value="tr">Türkçe</option>
+      <option value="en">English</option>
+    </select>
+    <input type="file" id="fileInput" accept="application/pdf" />
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card toolbar">
+    <button id="btnPrev" class="btn">←</button>
+    <span id="pageInfo">0 / 0</span>
+    <button id="btnNext" class="btn">→</button>
+    
+    <div style="margin-left:20px;">
+        Seitenbereich: 
+        <input type="number" id="pageStart" class="range-input" value="1"> bis 
+        <input type="number" id="pageEnd" class="range-input" value="1">
+    </div>
+
+    <div style="flex-grow:1"></div>
+    <button id="btnExtract" class="btn btn-primary" disabled>Extrahieren</button>
+    <button id="btnExport" class="btn btn-success" disabled>Excel Export</button>
+    <button onclick="resetGuides()" class="btn btn-danger">Reset</button>
+  </div>
+
+  <div id="viewer-container">
+    <div id="canvas-wrapper">
+      <div id="header-overlay"></div>
+      <canvas id="pdf-canvas"></canvas>
+      <canvas id="guide-canvas" class="guide-layer"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="previewArea" style="overflow-x: auto; max-height: 400px;"></div>
+  </div>
+</div>
+
+<script>
+let pdfDoc = null, pageNum = 1, scale = 1.3;
+let canvas = document.getElementById('pdf-canvas'), ctx = canvas.getContext('2d');
+let gCanvas = document.getElementById('guide-canvas'), gCtx = gCanvas.getContext('2d');
+let guides = { header: 0.05, footer: 0.95, cols: [0.1, 0.4, 0.7, 0.85] };
+let colSettings = []; // {title, type}
+let masterColIdx = 0;
+let isDragging = false, dragTarget = null;
+let extractedRows = [];
+
+// Init UI Strings
+const i18n = {
+    de: { master: "Anker", types: ["Text", "Zahl", "Euro"], extract: "Extrahieren", export: "Export" },
+    tr: { master: "Ana", types: ["Metin", "Sayı", "Para"], extract: "Çek", export: "Aktar" },
+    en: { master: "Master", types: ["Text", "Number", "Currency"], extract: "Extract", export: "Export" }
+};
+let lang = 'de';
+
+function updateLocale() {
+    lang = document.getElementById('langSelect').value;
+    document.getElementById('btnExtract').innerText = i18n[lang].extract;
+    document.getElementById('btnExport').innerText = i18n[lang].export;
+    updateHeaderOverlay();
+}
+
+/** PDF LOGIC **/
+document.getElementById('fileInput').onchange = async (e) => {
+    const ab = await e.target.files[0].arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument(ab).promise;
+    document.getElementById('pageEnd').value = pdfDoc.numPages;
+    document.getElementById('btnExtract').disabled = false;
+    renderPage(1);
+};
+
+async function renderPage(num) {
+    if (!pdfDoc || num < 1 || num > pdfDoc.numPages) return;
+    pageNum = num;
+    document.getElementById('pageInfo').innerText = `${pageNum} / ${pdfDoc.numPages}`;
+    const page = await pdfDoc.getPage(num);
+    const vp = page.getViewport({ scale });
+    canvas.width = gCanvas.width = vp.width;
+    canvas.height = gCanvas.height = vp.height;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    drawGuides();
+}
+
+/** GUIDE INTERACTION **/
+function drawGuides() {
+    const w = gCanvas.width, h = gCanvas.height;
+    gCtx.clearRect(0, 0, w, h);
+    
+    // Header/Footer (Red Lines)
+    gCtx.strokeStyle = "#cf222e"; gCtx.lineWidth = 2;
+    [guides.header, guides.footer].forEach(y => {
+        gCtx.beginPath(); gCtx.moveTo(0, y*h); gCtx.lineTo(w, y*h); gCtx.stroke();
+    });
+
+    // Columns (Blue Lines)
+    gCtx.strokeStyle = "#0969da"; gCtx.lineWidth = 1; gCtx.setLineDash([5, 3]);
+    guides.cols.forEach(x => {
+        gCtx.beginPath(); gCtx.moveTo(x*w, 0); gCtx.lineTo(x*w, h); gCtx.stroke();
+    });
+    gCtx.setLineDash([]);
+    updateHeaderOverlay();
+}
+
+function updateHeaderOverlay() {
+    const overlay = document.getElementById('header-overlay');
+    overlay.innerHTML = "";
+    const bounds = [0, ...guides.cols, 1];
+    
+    bounds.slice(0, -1).forEach((b, i) => {
+        if(!colSettings[i]) colSettings[i] = { title: `Spalte ${i+1}`, type: 'text' };
+        const box = document.createElement('div');
+        box.className = 'col-box' + (i === masterColIdx ? ' master' : '');
+        box.style.left = (b * 100) + "%";
+        box.style.width = ((bounds[i+1] - b) * 100) + "%";
+        
+        box.innerHTML = `
+            <input type="text" value="${colSettings[i].title}" oninput="colSettings[${i}].title=this.value">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <select onchange="colSettings[${i}].type=this.value">
+                    <option value="text" ${colSettings[i].type==='text'?'selected':''}>${i18n[lang].types[0]}</option>
+                    <option value="number" ${colSettings[i].type==='number'?'selected':''}>${i18n[lang].types[1]}</option>
+                    <option value="currency" ${colSettings[i].type==='currency'?'selected':''}>${i18n[lang].types[2]}</option>
+                </select>
+                <input type="radio" name="m" ${i===masterColIdx?'checked':''} onclick="masterColIdx=${i}; drawGuides();" title="Master">
+            </div>
+        `;
+        overlay.appendChild(box);
+    });
+}
+
+// Interaction
+gCanvas.onmousedown = (e) => {
+    const rect = gCanvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / gCanvas.width;
+    const y = (e.clientY - rect.top) / gCanvas.height;
+
+    if(Math.abs(y - guides.header) < 0.02) { isDragging = true; dragTarget = 'h'; return; }
+    if(Math.abs(y - guides.footer) < 0.02) { isDragging = true; dragTarget = 'f'; return; }
+    
+    let colIdx = guides.cols.findIndex(c => Math.abs(c - x) < 0.015);
+    if(colIdx !== -1) { isDragging = true; dragTarget = colIdx; }
+    else {
+        // Add new column on click
+        guides.cols.push(x);
+        guides.cols.sort((a,b) => a-b);
+        colSettings = []; // Reset names to match
+        drawGuides();
+    }
+};
+
+gCanvas.oncontextmenu = (e) => {
+    e.preventDefault();
+    const rect = gCanvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / gCanvas.width;
+    let colIdx = guides.cols.findIndex(c => Math.abs(c - x) < 0.02);
+    if(colIdx !== -1) {
+        guides.cols.splice(colIdx, 1);
+        colSettings = [];
+        drawGuides();
+    }
+};
+
+window.onmousemove = (e) => {
+    if(!isDragging) return;
+    const rect = gCanvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / gCanvas.width;
+    const y = (e.clientY - rect.top) / gCanvas.height;
+    if(dragTarget === 'h') guides.header = y;
+    else if(dragTarget === 'f') guides.footer = y;
+    else if(typeof dragTarget === 'number') guides.cols[dragTarget] = x;
+    drawGuides();
+};
+window.onmouseup = () => isDragging = false;
+
+/** EXTRACTION **/
+document.getElementById('btnExtract').onclick = async () => {
+    extractedRows = [];
+    const start = parseInt(document.getElementById('pageStart').value);
+    const end = parseInt(document.getElementById('pageEnd').value);
+    const colCount = guides.cols.length + 1;
+
+    for (let p = start; p <= end; p++) {
+        const page = await pdfDoc.getPage(p);
+        const text = await page.getTextContent();
+        const vp = page.getViewport({ scale: 1.0 });
+        const h = vp.height, w = vp.width;
+
+        let items = text.items.map(it => {
+            const [vx, vy] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+            return { str: it.str, x: vx, y: vy };
+        }).filter(it => it.y > guides.header*h && it.y < guides.footer*h);
+
+        items.sort((a, b) => Math.abs(a.y - b.y) < 6 ? a.x - b.x : a.y - b.y);
+
+        let lines = [];
+        items.forEach(it => {
+            let last = lines[lines.length-1];
+            if(!last || Math.abs(it.y - last.y) > 7) {
+                lines.push({ y: it.y, cells: new Array(colCount).fill("") });
+                last = lines[lines.length-1];
+            }
+            let cIdx = 0;
+            for(let i=0; i<guides.cols.length; i++) if(it.x > guides.cols[i]*w) cIdx = i+1;
+            last.cells[cIdx] += (last.cells[cIdx] ? " " : "") + it.str.trim();
+        });
+
+        lines.forEach(line => {
+            const hasMaster = line.cells[masterColIdx] && line.cells[masterColIdx].trim().length > 0;
+            if(hasMaster || extractedRows.length === 0) extractedRows.push([...line.cells]);
+            else {
+                let last = extractedRows[extractedRows.length - 1];
+                line.cells.forEach((c, i) => { if(c) last[i] += "\n" + c; });
+            }
+        });
+    }
+    renderPreview();
+};
+
+function renderPreview() {
+    const div = document.getElementById('previewArea');
+    let h = `<table><tr>${colSettings.map(s => `<th>${s.title}</th>`).join('')}</tr>`;
+    extractedRows.forEach(r => h += `<tr>${r.map(c => `<td>${c.replace(/\n/g,'<br>')}</td>`).join('')}</tr>`);
+    div.innerHTML = h + `</table>`;
+    document.getElementById('btnExport').disabled = false;
+}
+
+document.getElementById('btnExport').onclick = () => {
+    const sheetData = [colSettings.map(s => s.title)];
+    extractedRows.forEach(row => {
+        sheetData.push(row.map((cell, i) => {
+            const type = colSettings[i].type;
+            if(type === 'text') return cell;
+            let n = cell.replace(/[^0-9,.-]/g, '').replace(',','.');
+            return parseFloat(n) || cell;
+        }));
+    });
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "LV");
+    XLSX.writeFile(wb, `LV_Export.xlsx`);
+};
+
+function resetGuides() { guides.cols = [0.1, 0.4, 0.7, 0.85]; colSettings = []; drawGuides(); }
+document.getElementById('btnPrev').onclick = () => renderPage(pageNum-1);
+document.getElementById('btnNext').onclick = () => renderPage(pageNum+1);
+updateLocale();
+</script>
+</body>
+</html>
